@@ -1,0 +1,124 @@
+/** Owner screens: stats, rules editor, team, operations log. (The cash desk tab reuses the staff screen.) */
+import type { EditableRulesDTO, StaffDTO } from '@honey/contracts';
+import { S, actions, changes, app } from '../state';
+import { GIFT_LABELS } from '../config/texts';
+import { api, ApiErr } from '../api';
+import { esc, fmt, toast } from '../ui/dom';
+import { opRow } from './staff';
+
+export function ownerView(): string {
+  const o = S.owner;
+  const body = o.tab === 'stats' ? statsView() : o.tab === 'rules' ? rulesView() : o.tab === 'staff' ? teamView() : opsView();
+  return `<main class="scr" id="scr">${body}</main>`;
+}
+
+export async function loadOwnerTab() {
+  const o = S.owner; o.error = null;
+  try {
+    if (o.tab === 'stats') o.stats = await api.stats();
+    else if (o.tab === 'rules') { o.rules = await api.rules(); o.draft = structuredClone(o.rules); }
+    else if (o.tab === 'staff') o.staffList = await api.staff();
+    else if (o.tab === 'ops') o.ops = await api.operations();
+  } catch (e) { o.error = (e as ApiErr).message; }
+  app.render();
+}
+
+const errBox = () => S.owner.error ? `<div class="note-box warn">${esc(S.owner.error)} <button class="link" data-act="ownerReload">Повторить</button></div>` : '';
+
+function statsView() {
+  const s = S.owner.stats;
+  if (!s) return `<h2 class="h disp">Статистика</h2>${errBox() || '<p class="mut">Загрузка…</p>'}`;
+  const max = Math.max(1, ...s.perWeek.map(w => w.purchases)), W = 300, H = 110, n = s.perWeek.length || 1, bw = Math.min(28, (W - (n - 1) * 8) / n), gap = n > 1 ? (W - bw * n) / (n - 1) : 0;
+  const bars = s.perWeek.map((w, i) => {
+    const h = w.purchases / max * (H - 30), x = i * (bw + gap), d = new Date(w.weekStart);
+    return `<rect x="${x}" y="${H - 16 - h}" width="${bw}" height="${Math.max(h, 1)}" rx="5" fill="${i === n - 1 ? 'var(--c-accent)' : 'var(--c-line)'}"/><text x="${x + bw / 2}" y="${H - 20 - h}" text-anchor="middle" font-size="9.5" fill="var(--c-muted)">${w.purchases}</text><text x="${x + bw / 2}" y="${H - 3}" text-anchor="middle" font-size="8.5" fill="var(--c-muted)">${d.getDate()}.${String(d.getMonth() + 1).padStart(2, '0')}</text>`;
+  }).join('');
+  return `<h2 class="h disp">Статистика</h2>${errBox()}
+    <div class="kpis">
+      <div class="kpi"><div class="v">${fmt(s.clients)}</div><div class="k">участников · +${s.clientsNew7d} за 7 дней</div></div>
+      <div class="kpi"><div class="v">${Math.round(s.repeatRate90d * 100)}%</div><div class="k">вернулись за 90 дней</div></div>
+      <div class="kpi"><div class="v">${fmt(s.purchases)}</div><div class="k">покупок · ${s.purchases7d} за 7 дней</div></div>
+      <div class="kpi"><div class="v">${fmt(s.revenueWithCard)}</div><div class="k">выручка с картой, сум</div></div>
+      <div class="kpi"><div class="v">${fmt(s.points.accrued)}</div><div class="k">мёда начислено</div></div>
+      <div class="kpi"><div class="v">${fmt(s.points.redeemed)}</div><div class="k">мёда потрачено</div></div>
+      <div class="kpi"><div class="v">${fmt(s.points.expired)}</div><div class="k">мёда сгорело</div></div>
+      <div class="kpi"><div class="v">${fmt(s.points.outstanding)}</div><div class="k">мёда на счетах сейчас</div></div>
+      <div class="kpi"><div class="v">${s.giftsUnlocked}</div><div class="k">подарков открыто</div></div>
+      <div class="kpi"><div class="v">${s.giftsUsed}</div><div class="k">подарков выдано</div></div>
+    </div>
+    <div class="chart"><div class="mut" style="font-size:12px;margin-bottom:4px">Покупки с картой по неделям</div><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Покупки с картой по неделям">${bars}</svg></div>`;
+}
+
+function rulesView() {
+  const d = S.owner.draft;
+  if (!d) return `<h2 class="h disp">Правила</h2>${errBox() || '<p class="mut">Загрузка…</p>'}`;
+  const num = (id: string, label: string, v: number, step = 1, hint = '') => `<div class="f"><label for="${id}">${label}${hint ? `<small>${hint}</small>` : ''}</label><input type="number" inputmode="numeric" id="${id}" data-change="rule" data-key="${id}" step="${step}" min="0" value="${v}"></div>`;
+  const levels = d.levels.map((l, i) => `<div class="lv-row"><input aria-label="Название уровня ${i + 1}" data-change="rule" data-key="lvname" data-i="${i}" value="${esc(l.name)}"><label class="mini">%<input type="number" min="0" max="50" data-change="rule" data-key="lvpct" data-i="${i}" value="${l.pct}"></label><label class="mini">от, сум<input type="number" min="0" step="100000" data-change="rule" data-key="lvfrom" data-i="${i}" value="${l.from}" ${i === 0 ? 'disabled' : ''}></label></div>`).join('');
+  const cells = Array.from({ length: d.cells }, (_, i) => i + 1).map(c => `<label>${c}<select data-change="rule" data-key="gift" data-cell="${c}"><option value="">—</option>${Object.entries(GIFT_LABELS).map(([v, l]) => `<option value="${v}" ${d.gifts[String(c)] === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>`).join('');
+  const dirty = JSON.stringify(d) !== JSON.stringify(S.owner.rules);
+  return `<h2 class="h disp">Правила программы</h2>${errBox()}
+    <p class="mut" style="margin-top:-6px">Версия ${d.version}. Новые правила действуют для следующих покупок, прошлые не пересчитываются.</p>
+    <div class="sub">Уровни и кешбэк</div><div class="lv-list">${levels}</div>
+    <div class="sub">Соты</div>
+    <div class="fields">${num('minPurchaseForCell', 'Мин. сумма покупки для ячейки, сум', d.minPurchaseForCell, 10000)}${num('maxCellsPerDay', 'Ячеек в день на клиента', d.maxCellsPerDay, 1, 'защита от дробления чека')}</div>
+    <div class="cells-ed">${cells}</div>
+    <div class="sub">Мёд</div>
+    <div class="fields">${num('maxRedeemPct', 'Оплата мёдом, до % заказа', d.maxRedeemPct)}${num('expiryDays', 'Сгорает без покупок через, дней', d.expiryDays)}<div class="f"><label for="warn">Напоминать за, дней<small>через запятую</small></label><input id="warn" data-change="rule" data-key="warn" value="${d.expiryWarnDays.join(', ')}"></div>${num('welcomeBonus', 'Приветственный бонус, мёда', d.welcomeBonus, 1000)}</div>
+    <div class="sticky-save"><button class="b acc full big" data-act="saveRules" ${!dirty || S.owner.busy ? 'disabled' : ''}>${S.owner.busy ? 'Сохраняем…' : dirty ? 'Сохранить правила' : 'Изменений нет'}</button>${dirty ? '<button class="link" data-act="discardRules">Сбросить изменения</button>' : ''}</div>`;
+}
+
+function teamView() {
+  const list = S.owner.staffList;
+  const roles: Record<StaffDTO['role'], string> = { florist: 'Флорист', manager: 'Менеджер', owner: 'Владелец' };
+  return `<h2 class="h disp">Команда</h2>${errBox()}
+    <p class="mut" style="margin-top:-6px">Флорист начисляет и отменяет покупки. Менеджер ещё видит журнал. Владелец меняет правила и команду.</p>
+    <div class="list">${list ? (list.length ? list.map(s => `<div class="it"><div class="ic">${esc(s.name.slice(0, 1))}</div><div><div class="t">${esc(s.name)}</div><div class="s">${roles[s.role]}${s.telegramId ? ' · id ' + s.telegramId : ' · ждёт входа в бота'}</div></div><button class="link bad" data-act="removeStaff" data-id="${esc(s.id)}">Убрать</button></div>`).join('') : '<p class="mut">Пока никого. Добавьте флориста ниже.</p>') : '<p class="mut">Загрузка…</p>'}</div>
+    <div class="sub">Добавить сотрудника</div>
+    <div class="form"><label class="fl" for="newStaff">Телефон (как в Telegram) или Telegram ID</label><input id="newStaff" inputmode="tel" placeholder="+998 90 123 45 67" autocomplete="off">
+      <label class="fl" for="newRole">Роль</label><select id="newRole"><option value="florist">Флорист</option><option value="manager">Менеджер</option><option value="owner">Владелец</option></select>
+      <button class="b acc full" data-act="addStaff" style="margin-top:8px">Добавить</button>
+      <p class="mut" style="font-size:12px">Сотрудник должен один раз открыть бота и поделиться номером — после этого роль включится сама.</p></div>`;
+}
+
+function opsView() {
+  const ops = S.owner.ops;
+  return `<h2 class="h disp">Журнал операций</h2>${errBox()}<p class="mut" style="margin-top:-6px">Все начисления, списания, отмены и сгорания с автором.</p>
+    <div class="ops">${ops ? (ops.length ? ops.map(opRow).join('') : '<p class="mut">Операций пока нет.</p>') : '<p class="mut">Загрузка…</p>'}</div>`;
+}
+
+/* ---------------- actions ---------------- */
+actions.ownerReload = () => loadOwnerTab();
+changes.rule = el => {
+  const d = S.owner.draft; if (!d) return;
+  const k = el.dataset.key!, v = el.value, n = Math.max(0, Math.round(+v || 0));
+  if (k === 'lvname') d.levels[+el.dataset.i!].name = v.trim() || d.levels[+el.dataset.i!].name;
+  else if (k === 'lvpct') d.levels[+el.dataset.i!].pct = Math.min(50, n);
+  else if (k === 'lvfrom') d.levels[+el.dataset.i!].from = n;
+  else if (k === 'gift') { const c = el.dataset.cell!; if (v) d.gifts[c] = v; else delete d.gifts[c]; }
+  else if (k === 'warn') d.expiryWarnDays = v.split(/[,\s]+/).map(x => Math.round(+x)).filter(x => x > 0).sort((a, b) => b - a);
+  else (d as unknown as Record<string, number>)[k] = n;
+  app.render();
+};
+actions.discardRules = () => { S.owner.draft = structuredClone(S.owner.rules); app.render(); };
+actions.saveRules = async () => {
+  const o = S.owner; if (!o.draft) return;
+  o.busy = true; app.render();
+  try {
+    const saved: EditableRulesDTO = await api.saveRules(o.draft);
+    o.rules = saved; o.draft = structuredClone(saved);
+    toast(`Правила сохранены, версия ${saved.version}`, 'ok');
+    await app.refresh();
+  } catch (e) { toast((e as ApiErr).message, 'error'); }
+  finally { o.busy = false; app.render(); }
+};
+actions.addStaff = async () => {
+  const v = (document.getElementById('newStaff') as HTMLInputElement).value.trim();
+  const role = (document.getElementById('newRole') as HTMLSelectElement).value as StaffDTO['role'];
+  if (v.replace(/\D/g, '').length < 5) { toast('Введите телефон или Telegram ID', 'error'); return; }
+  try { await api.addStaff(v, role); toast('Сотрудник добавлен', 'ok'); S.owner.staffList = await api.staff(); app.render(); }
+  catch (e) { toast((e as ApiErr).message, 'error'); }
+};
+actions.removeStaff = async el => {
+  try { await api.removeStaff(el.dataset.id!); S.owner.staffList = await api.staff(); app.render(); toast('Сотрудник убран', 'ok'); }
+  catch (e) { toast((e as ApiErr).message, 'error'); }
+};
