@@ -54,3 +54,31 @@ BOT_USERNAME = ""
 # Optional plain variables:
 #   PUBLIC_URL        https://honey-loyalty.<subdomain>.workers.dev (otherwise taken from the /setup request)
 #   CRON_MAX_CLIENTS  clients the daily job processes per run (default 40; the rest wait for the next day)
+
+# ---------------------------------------------------------------------------
+# DEV environment: a SEPARATE Worker "honey-loyalty-dev" with its own D1 database and its own
+# test bot, built from the `dev` branch. Nothing here touches the production Worker.
+# Deploy command for the dev Worker: npx wrangler d1 migrations apply honey-loyalty-dev --remote --env dev && npx wrangler deploy --env dev
+# Secrets are per Worker: add BOT_TOKEN (dev bot), WEBHOOK_SECRET, SETUP_KEY, TEST_KEY to honey-loyalty-dev too.
+[env.dev]
+name = "honey-loyalty-dev"
+
+[env.dev.assets]
+directory = "../miniapp/dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+run_worker_first = ["/api/*", "/telegram/*", "/setup", "/health"]
+
+[[env.dev.d1_databases]]
+binding = "DB"
+database_name = "honey-loyalty-dev"
+# Database ID of the DEV D1 database (create it in the dashboard, name exactly honey-loyalty-dev).
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
+
+[env.dev.triggers]
+crons = ["0 4 * * *"]
+
+[env.dev.vars]
+TEST_MODE = "1"
+BOT_USERNAME = ""

@@ -180,6 +180,50 @@ https://honey-loyalty.<ваше-имя>.workers.dev/setup?key=<SETUP_KEY>&owner=
 
 **Перед запуском для настоящих клиентов** поставьте `TEST_MODE = "0"` в `apps/worker/wrangler.toml` (именно в файле: значение из файла перезаписывает панель при каждом деплое), создайте новую чистую базу (шаги 1–2), назначьте владельца через `/setup?...&owner=...`, затем смените `SETUP_KEY` и удалите `TEST_KEY`.
 
+---
+
+## Два окружения: заказчик и разработка
+
+| | Заказчик | Разработка (наш полигон) |
+|---|---|---|
+| Ветка | `main` | `dev` |
+| Worker | `honey-loyalty` | `honey-loyalty-dev` |
+| База D1 | `honey-loyalty-client` (чистая) | `honey-loyalty` (все тестовые данные) |
+| Бот | бот заказчика | `@honeyflowers_test_bot` |
+
+Правило: в `main` попадает только проверенное. Всё новое сначала в `dev`.
+
+### Перенос текущего Worker в роль «разработка» (один раз)
+
+Сейчас Worker `honey-loyalty` подключён к ветке `main`, тестовой базе и тестовому боту. Его нужно превратить в `honey-loyalty-dev`, а для заказчика поднять чистый.
+
+1. **Worker `honey-loyalty` → Settings → Build:** Production branch поменять на `dev`; Deploy command заменить на `npx wrangler d1 migrations apply honey-loyalty --remote --env dev && npx wrangler deploy --env dev`. Сохранить. После следующего пуша в `dev` в списке Workers появится `honey-loyalty-dev` — это и есть полигон (старый Worker `honey-loyalty` можно затем удалить, его заменит новый для заказчика, или переименовать проект).
+2. **Секреты** для `honey-loyalty-dev`: те же `BOT_TOKEN` (тестовый бот), `WEBHOOK_SECRET`, `SETUP_KEY`, `TEST_KEY`, `PUBLIC_URL` = новый адрес `https://honey-loyalty-dev.<имя>.workers.dev`. Затем открыть `/setup?key=…` у нового адреса — тестовый бот переключится на него.
+
+### Чистая версия для заказчика (один раз)
+
+1. **Бот заказчика.** В @BotFather `/newbot`: имя «Honey Flowers», юзернейм вроде `honeyflowers_bot` или `honey_flowers_uz_bot`. Токен сохранить. Лучше создать с аккаунта заказчика или потом передать ему через BotFather → `/mybots` → Transfer Ownership.
+2. **Чистая база.** D1 → Create, имя ровно `honey-loyalty-client`. Database ID вписать в `apps/worker/wrangler.toml` в верхний блок `[[d1_databases]]`.
+3. **Worker заказчика.** Workers & Pages → Create → Import a repository → тот же репозиторий:
+
+   | Поле | Значение |
+   |---|---|
+   | Project name | `honey-loyalty` (если старый ещё занимает имя — сначала переименовать/удалить его, см. выше) |
+   | Production branch | `main` |
+   | Root directory | `apps/worker` |
+   | Build command | `cd ../.. && npm ci && npm run build` |
+   | Deploy command | `npx wrangler d1 migrations apply honey-loyalty-client --remote && npx wrangler deploy` |
+
+4. **Секреты**: новые `BOT_TOKEN` (бот заказчика), `WEBHOOK_SECRET`, `SETUP_KEY`, `TEST_KEY`, `PUBLIC_URL`. Deploy, затем `/setup?key=…`.
+
+Пока идёт тестирование, у заказчика тоже стоит `TEST_MODE = "1"` (кнопка «Тест», переключение ролей). Перед реальным запуском — раздел «Тестовый режим» ниже.
+
+### Как работать дальше
+
+- Разработка в ветке `dev`: `git checkout dev`, правки, `git add -A && git commit -m "…" && git push`. Через 2–3 минуты обновляются dev-адрес и тестовый бот.
+- Проверенное переносится заказчику: `git checkout main && git merge dev && git push && git checkout dev`.
+- Базы не пересекаются: эксперименты в dev не трогают клиентов заказчика.
+
 ## Локальный запуск (для разработчика)
 
 ```bash
