@@ -1,0 +1,27 @@
+# Local PostgreSQL for the (not yet implemented) Postgres repository.
+# The API currently runs on the in-memory repository and does not need this.
+#   docker compose up -d
+# db/migrations/*.sql are applied automatically on the FIRST start (empty volume).
+# To re-apply: docker compose down -v && docker compose up -d
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: honey
+      POSTGRES_PASSWORD: honey
+      POSTGRES_DB: honey
+      TZ: Asia/Tashkent
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U honey -d honey"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:

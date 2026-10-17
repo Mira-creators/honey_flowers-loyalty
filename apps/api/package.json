@@ -1,0 +1,23 @@
+{
+  "name": "@honey/api",
+  "version": "0.1.0",
+  "private": true,
+  "description": "HTTP API of the Honey Flowers loyalty program (Fastify)",
+  "type": "module",
+  "main": "./dist/server.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "dev": "tsx watch src/server.ts",
+    "start": "node dist/server.js"
+  },
+  "dependencies": {
+    "@honey/core": "0.1.0",
+    "fastify": "^5.12.7",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "tsx": "^4.23.15"
+  }
+}
