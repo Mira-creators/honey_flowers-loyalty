@@ -28,7 +28,7 @@ function findView() {
 
 function recentBlock() {
   const r = S.staff.recent;
-  if (!r) return `<div class="sub">Последние операции</div><p class="mut">Загрузка…</p>`;
+  if (!r) return `<div class="sub">Последние операции</div><p class="mut">${S.staff.recentError ? 'Не удалось загрузить. <button class="link" data-act="reloadRecent">Повторить</button>' : 'Загрузка…'}</p>`;
   if (!r.length) return `<div class="sub">Последние операции</div><p class="mut">Пока пусто. Первая покупка появится здесь.</p>`;
   return `<div class="sub">Последние операции</div><div class="ops">${r.slice(0, 12).map(opRow).join('')}</div>`;
 }
@@ -70,7 +70,7 @@ function doneView() {
 
 /* ---------------- data ---------------- */
 export async function loadRecent() {
-  try { S.staff.recent = await api.recent(); } catch { S.staff.recent = []; }
+  try { S.staff.recent = await api.recent(); S.staff.recentError = false; } catch (e) { S.staff.recent = null; S.staff.recentError = true; toast((e as ApiErr).message, 'error'); }
   if (S.staff.step === 'find') app.render();
 }
 
@@ -93,7 +93,9 @@ const refreshPreview = debounce(async () => {
   try {
     const p = await api.preview({ clientId: st.client.id, amount: amt, redeem: st.redeem, giftId: st.giftId, channel: st.channel });
     if (+st.amount === reqAmount && st.redeem === reqRedeem && st.giftId === reqGift) { st.preview = p; st.previewError = null; }
-  } catch (e) { st.preview = null; st.previewError = (e as ApiErr).message; }
+  } catch (e) {
+    if (+st.amount === reqAmount && st.redeem === reqRedeem && st.giftId === reqGift) { st.preview = null; st.previewError = (e as ApiErr).message; }
+  }
   app.render();
 }, 250);
 
@@ -106,11 +108,12 @@ actions.scan = async () => {
 };
 actions.search = () => { const q = (document.getElementById('q') as HTMLInputElement)?.value.trim() ?? ''; S.staff.query = q; if (q.length < 3) { toast('Введите хотя бы 3 символа', 'error'); return; } openClient(q); };
 actions.pickClient = el => openClient(el.dataset.id!);
+actions.reloadRecent = () => loadRecent();
 actions.backToFind = () => { resetStaff(); app.render(); loadRecent(); };
 actions.key = el => {
   const k = el.dataset.k!, st = S.staff;
   st.amount = k === '⌫' ? st.amount.slice(0, -1) : (st.amount === '0' ? '' : st.amount) + k;
-  if (st.amount.length > 10) st.amount = st.amount.slice(0, 10);
+  if (st.amount.length > 9) st.amount = st.amount.slice(0, 9);
   tg.haptic('light'); inputChanged();
 };
 actions.channel = el => { S.staff.channel = el.dataset.v as 'store' | 'delivery'; inputChanged(); };
@@ -120,7 +123,9 @@ actions.charge = async () => {
   const st = S.staff; if (st.busy || !st.client || !st.preview) return;
   st.busy = true; app.render();
   try {
+    const expected = { redeemed: st.preview.redeemed, paid: st.preview.paid };
     const r = await api.purchase({ clientId: st.client.id, amount: +st.amount, redeem: st.redeem, giftId: st.giftId, channel: st.channel, idempotencyKey: st.idem });
+    if (r.preview.redeemed !== expected.redeemed || r.preview.paid !== expected.paid) toast(`Внимание: списано ${fmt(r.preview.redeemed)} мёда, к оплате ${fmt(r.preview.paid)} сум — баланс клиента изменился с момента расчёта`, 'error');
     st.result = r; st.step = 'done'; st.client = r.client; tg.haptic('success');
   } catch (e) {
     tg.haptic('error');

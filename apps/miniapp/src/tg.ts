@@ -27,17 +27,27 @@ export const tg = {
       try { w.requestContact((ok: boolean) => res(!!ok)); } catch { res(false); }
     });
   },
-  canScan(): boolean { return tg.inTelegram && typeof W()?.showScanQrPopup === 'function'; },
+  canScan(): boolean {
+    const w = W(); if (!tg.inTelegram || typeof w?.showScanQrPopup !== 'function') return false;
+    // The camera scanner exists only in the mobile apps (Desktop/Web define the function but open nothing).
+    const mobile = ['ios', 'android', 'android_x'].includes(String(w.platform));
+    let ok = true; try { ok = typeof w.isVersionAtLeast !== 'function' || w.isVersionAtLeast('6.4'); } catch { ok = false; }
+    return mobile && ok;
+  },
+  close() { try { W()?.close?.(); } catch { /* ignore */ } },
   scanQr(text: string): Promise<string | null> {
     return new Promise(res => {
       const w = W(); if (!tg.canScan()) return res(null);
       let done = false;
       const closed = () => { w.offEvent?.('scanQrPopupClosed', closed); if (!done) { done = true; res(null); } };
       w.onEvent?.('scanQrPopupClosed', closed);
-      w.showScanQrPopup({ text }, (data: string) => {
-        if (done) return true;
-        done = true; w.offEvent?.('scanQrPopupClosed', closed); res(data); return true;
-      });
+      try {
+        w.showScanQrPopup({ text }, (data: string) => {
+          if (done) return true;
+          if (!/^HF:?\s*\d{4,6}$/i.test(String(data).trim())) { tg.haptic('error'); return false; } // not a honey card: keep scanning
+          done = true; w.offEvent?.('scanQrPopupClosed', closed); res(data); return true;
+        });
+      } catch { done = true; w.offEvent?.('scanQrPopupClosed', closed); res(null); }
     });
   },
   openTelegramLink(url: string) { const w = W(); if (tg.inTelegram && w?.openTelegramLink) w.openTelegramLink(url); else window.open(url, '_blank', 'noopener'); },

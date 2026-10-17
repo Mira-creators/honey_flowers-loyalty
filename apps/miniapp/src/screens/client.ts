@@ -11,9 +11,14 @@ import { combSVG, fly, beeAt, dropToBalance, countUp, giftSvg } from '../ui/comb
 import { qrSvg } from '../ui/qr';
 
 const th = () => THEMES[S.themeId];
+/** Chat that takes orders (from the shop's channel description). Change here if the shop changes it. */
+const ORDER_CHAT = 'honey_uz';
 const L = () => T(S.lang);
 const dstr = (iso: string) => { const d = new Date(iso); return L().date(d.getDate(), L().months[d.getMonth()]); };
-const lvName = (l: LevelInfo) => L().levels[l.id] ?? l.name;
+// 'YYYY-MM-DD' Tashkent calendar day: format without time-zone conversion.
+const dayStr = (ymd: string) => { const [, m, d] = ymd.split('-').map(Number); return L().date(d, L().months[(m || 1) - 1]); };
+// Owner-edited names win; the uz table only translates the default level ids.
+const lvName = (l: LevelInfo) => (S.lang === 'uz' && L().levels[l.id]) ? L().levels[l.id] : l.name;
 const giftText = (type: string) => L().giftTypes[type] ?? { t: type, p: '' };
 const giftCells = (c: ClientSummaryDTO) => Object.keys(c.card.gifts).map(Number).sort((a, b) => a - b);
 
@@ -41,7 +46,7 @@ export function homeView(c: ClientSummaryDTO, shown?: { filled?: number; justFil
   return `
     <div class="top-row"><h2 class="disp">${esc(t.hello(c.name))}</h2><span class="lvl"><i><svg viewBox="-24 -24 48 40" width="16" aria-hidden="true">${th().mascot(0.55)}</svg></i>${esc(lvName(lv))} · ${lv.pct}%</span></div>
     <div class="comb-card"><div class="comb-meta"><span>${t.cardMeta(c.card.cycle, filled, c.card.cells)}</span><span>${t.ahead(ahead)}</span></div>${combSVG(th(), c.card, filled, shown?.justFilled)}</div>
-    <div class="bal" id="bal"><span class="l">${t.balLbl}</span><span class="n" id="balN">${fmt(bal)}<small>${t.unit}</small></span><span class="e">${c.expiresAt && c.balance > 0 ? t.until(dstr(c.expiresAt)) : ''}</span></div>
+    <div class="bal" id="bal"><span class="l">${t.balLbl}</span><span class="n" id="balN">${fmt(bal)}<small>${t.unit}</small></span><span class="e">${c.expiresOn && c.balance > 0 ? t.until(dayStr(c.expiresOn)) : ''}</span></div>
     <div class="prog"><div class="r"><span>${nx ? esc(t.toLevel(lvName(nx), nx.pct)) : t.top}</span><b>${nx ? t.left(fmt(nx.left)) : t.topNote}</b></div><div class="track"><i style="width:${pct}%"></i></div></div>
     <div class="grid2">
       <button class="b" data-act="tab" data-tab="card">${IC.card}${t.myCard}</button>
@@ -98,7 +103,7 @@ function onboarding() {
 
 /* ---------------- actions ---------------- */
 actions.tab = el => { S.screen = el.dataset.tab as typeof S.screen; app.render(); { const scr = document.getElementById('scr'); if (scr) scr.scrollTop = 0; } tg.haptic('select'); };
-actions.order = () => { const u = 'honey_uz'; tg.openTelegramLink(`https://t.me/${u}`); };
+actions.order = () => { tg.openTelegramLink(`https://t.me/${ORDER_CHAT}`); };
 actions.lang = async el => {
   const l = el.dataset.l as 'ru' | 'uz'; if (l === S.lang) return;
   S.lang = l; app.render();
@@ -108,9 +113,9 @@ actions.share = async () => {
   S.waitingContact = true; app.render();
   const ok = await tg.requestContact();
   if (!ok) { S.waitingContact = false; app.render(); toast(L().shareFailed, 'error'); return; }
-  // The contact goes to the bot; poll until the Worker has created the client.
-  for (let i = 0; i < 15; i++) {
-    await sleep(1200);
+  // The contact goes to the bot; poll until the Worker has created the client (webhook may be slow: up to ~60 s).
+  for (let i = 0; i < 40; i++) {
+    await sleep(1500);
     await app.refresh();
     if (S.me?.registered) { S.waitingContact = false; app.render(); tg.haptic('success'); return; }
   }
@@ -131,7 +136,7 @@ export async function animateClientChange(prev: ClientSummaryDTO, next: ClientSu
   const sameCycle = next.card.cycle === prev.card.cycle;
   const lastPurchase = next.history.find(h => h.kind === 'purchase' && !prev.history.some(p => p.id === h.id));
   if (!root || S.screen !== 'home') {
-    if (newGifts.length || lvlUp || lastPurchase) toast(lastPurchase ? t.plusPoints(fmt(lastPurchase.points)) : t.gifts, 'ok');
+    if (newGifts.length || lvlUp || lastPurchase) toast(lastPurchase ? t.plusPoints(fmt(lastPurchase.cashback ?? Math.max(0, lastPurchase.points))) : t.newGift, 'ok');
     return;
   }
   S.animating = true;
@@ -156,7 +161,7 @@ export async function animateClientChange(prev: ClientSummaryDTO, next: ClientSu
     }
     if (lastPurchase && !newGifts.length) {
       const ng = giftCells(next).find(n => n > next.card.filled);
-      toast(t.accruedToast(fmt(lastPurchase.points), ng ? ng - next.card.filled : 0), 'ok');
+      toast(t.accruedToast(fmt(lastPurchase.cashback ?? Math.max(0, lastPurchase.points)), ng ? ng - next.card.filled : 0, lastPurchase.redeemed ? fmt(lastPurchase.redeemed) : ''), 'ok');
     }
     for (const g of newGifts) { await sleep(400); await giftModal(g); }
     if (lvlUp) {

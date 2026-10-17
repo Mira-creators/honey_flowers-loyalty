@@ -1,6 +1,6 @@
 /** Owner screens: stats, rules editor, team, operations log. (The cash desk tab reuses the staff screen.) */
 import type { EditableRulesDTO, StaffDTO } from '@honey/contracts';
-import { S, actions, changes, app } from '../state';
+import { S, actions, changes, inputs, app } from '../state';
 import { GIFT_LABELS } from '../config/texts';
 import { api, ApiErr } from '../api';
 import { esc, fmt, toast } from '../ui/dom';
@@ -52,8 +52,8 @@ function statsView() {
 function rulesView() {
   const d = S.owner.draft;
   if (!d) return `<h2 class="h disp">Правила</h2>${errBox() || '<p class="mut">Загрузка…</p>'}`;
-  const num = (id: string, label: string, v: number, step = 1, hint = '') => `<div class="f"><label for="${id}">${label}${hint ? `<small>${hint}</small>` : ''}</label><input type="number" inputmode="numeric" id="${id}" data-change="rule" data-key="${id}" step="${step}" min="0" value="${v}"></div>`;
-  const levels = d.levels.map((l, i) => `<div class="lv-row"><input aria-label="Название уровня ${i + 1}" data-change="rule" data-key="lvname" data-i="${i}" value="${esc(l.name)}"><label class="mini">%<input type="number" min="0" max="50" data-change="rule" data-key="lvpct" data-i="${i}" value="${l.pct}"></label><label class="mini">от, сум<input type="number" min="0" step="100000" data-change="rule" data-key="lvfrom" data-i="${i}" value="${l.from}" ${i === 0 ? 'disabled' : ''}></label></div>`).join('');
+  const num = (id: string, label: string, v: number, step = 1, hint = '') => `<div class="f"><label for="${id}">${label}${hint ? `<small>${hint}</small>` : ''}</label><input type="number" inputmode="decimal" id="${id}" data-input="rule" data-key="${id}" step="${step}" min="0" value="${v}"></div>`;
+  const levels = d.levels.map((l, i) => `<div class="lv-row"><input aria-label="Название уровня ${i + 1}" data-input="rule" data-key="lvname" data-i="${i}" value="${esc(l.name)}"><label class="mini">%<input type="number" min="0" max="50" data-input="rule" data-key="lvpct" data-i="${i}" value="${l.pct}"></label><label class="mini">от, сум<input type="number" min="0" step="100000" data-input="rule" data-key="lvfrom" data-i="${i}" value="${l.from}" ${i === 0 ? 'disabled' : ''}></label></div>`).join('');
   const cells = Array.from({ length: d.cells }, (_, i) => i + 1).map(c => `<label>${c}<select data-change="rule" data-key="gift" data-cell="${c}"><option value="">—</option>${Object.entries(GIFT_LABELS).map(([v, l]) => `<option value="${v}" ${d.gifts[String(c)] === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>`).join('');
   const dirty = JSON.stringify(d) !== JSON.stringify(S.owner.rules);
   return `<h2 class="h disp">Правила программы</h2>${errBox()}
@@ -63,7 +63,7 @@ function rulesView() {
     <div class="fields">${num('minPurchaseForCell', 'Мин. сумма покупки для ячейки, сум', d.minPurchaseForCell, 10000)}${num('maxCellsPerDay', 'Ячеек в день на клиента', d.maxCellsPerDay, 1, 'защита от дробления чека')}</div>
     <div class="cells-ed">${cells}</div>
     <div class="sub">Мёд</div>
-    <div class="fields">${num('maxRedeemPct', 'Оплата мёдом, до % заказа', d.maxRedeemPct)}${num('expiryDays', 'Сгорает без покупок через, дней', d.expiryDays)}<div class="f"><label for="warn">Напоминать за, дней<small>через запятую</small></label><input id="warn" data-change="rule" data-key="warn" value="${d.expiryWarnDays.join(', ')}"></div>${num('welcomeBonus', 'Приветственный бонус, мёда', d.welcomeBonus, 1000)}</div>
+    <div class="fields">${num('maxRedeemPct', 'Оплата мёдом, до % заказа', d.maxRedeemPct)}${num('expiryDays', 'Сгорает без покупок через, дней', d.expiryDays)}<div class="f"><label for="warn">Напоминать за, дней<small>через запятую</small></label><input id="warn" data-input="rule" data-key="warn" value="${d.expiryWarnDays.join(', ')}"></div>${num('welcomeBonus', 'Приветственный бонус, мёда', d.welcomeBonus, 1000)}</div>
     <div class="sticky-save"><button class="b acc full big" data-act="saveRules" ${!dirty || S.owner.busy ? 'disabled' : ''}>${S.owner.busy ? 'Сохраняем…' : dirty ? 'Сохранить правила' : 'Изменений нет'}</button>${dirty ? '<button class="link" data-act="discardRules">Сбросить изменения</button>' : ''}</div>`;
 }
 
@@ -88,27 +88,42 @@ function opsView() {
 
 /* ---------------- actions ---------------- */
 actions.ownerReload = () => loadOwnerTab();
-changes.rule = el => {
-  const d = S.owner.draft; if (!d) return;
+inputs.rule = el => { const d = S.owner.draft; if (!d) return; applyRuleField(d, el); refreshSaveBar(); };
+changes.rule = el => { const d = S.owner.draft; if (!d) return; applyRuleField(d, el); app.render(); };
+function applyRuleField(d: EditableRulesDTO, el: HTMLInputElement | HTMLSelectElement) {
   const k = el.dataset.key!, v = el.value, n = Math.max(0, Math.round(+v || 0));
   if (k === 'lvname') d.levels[+el.dataset.i!].name = v.trim() || d.levels[+el.dataset.i!].name;
-  else if (k === 'lvpct') d.levels[+el.dataset.i!].pct = Math.min(50, n);
+  else if (k === 'lvpct') d.levels[+el.dataset.i!].pct = Math.min(100, Math.max(0, Math.round((+v || 0) * 100) / 100));
   else if (k === 'lvfrom') d.levels[+el.dataset.i!].from = n;
   else if (k === 'gift') { const c = el.dataset.cell!; if (v) d.gifts[c] = v; else delete d.gifts[c]; }
   else if (k === 'warn') d.expiryWarnDays = v.split(/[,\s]+/).map(x => Math.round(+x)).filter(x => x > 0).sort((a, b) => b - a);
   else (d as unknown as Record<string, number>)[k] = n;
-  app.render();
-};
+}
+/** Update only the save bar while the owner types, so the focused input is not rebuilt. */
+function refreshSaveBar() {
+  const d = S.owner.draft, btn = document.querySelector<HTMLButtonElement>('[data-act="saveRules"]'); if (!d || !btn) return;
+  const dirty = JSON.stringify(d) !== JSON.stringify(S.owner.rules);
+  btn.disabled = !dirty || S.owner.busy; btn.textContent = S.owner.busy ? 'Сохраняем…' : dirty ? 'Сохранить правила' : 'Изменений нет';
+}
 actions.discardRules = () => { S.owner.draft = structuredClone(S.owner.rules); app.render(); };
 actions.saveRules = async () => {
   const o = S.owner; if (!o.draft) return;
+  const ae = document.activeElement as HTMLInputElement | null;
+  if (ae?.dataset?.input) { inputs[ae.dataset.input]?.(ae); ae.blur(); }
   o.busy = true; app.render();
   try {
     const saved: EditableRulesDTO = await api.saveRules(o.draft);
     o.rules = saved; o.draft = structuredClone(saved);
     toast(`Правила сохранены, версия ${saved.version}`, 'ok');
     await app.refresh();
-  } catch (e) { toast((e as ApiErr).message, 'error'); }
+  } catch (e) {
+    const err = e as ApiErr;
+    if (err.status === 409) {
+      // Someone saved newer rules: keep the owner's edits, adopt the new version, let them retry.
+      try { const fresh = await api.rules(); o.rules = fresh; if (o.draft) o.draft.version = fresh.version; toast('Правила изменил кто-то ещё. Ваши правки сохранены — нажмите «Сохранить» ещё раз.', 'error'); }
+      catch { toast(err.message, 'error'); }
+    } else toast(err.message, 'error');
+  }
   finally { o.busy = false; app.render(); }
 };
 actions.addStaff = async () => {

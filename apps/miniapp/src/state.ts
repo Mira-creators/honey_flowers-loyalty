@@ -19,6 +19,7 @@ export interface StaffState {
   result: PurchaseResultDTO | null;
   busy: boolean;
   recent: OperationDTO[] | null;
+  recentError: boolean;
 }
 
 export const S = {
@@ -47,7 +48,7 @@ export const S = {
 export function resetStaff(keepRecent = true) {
   S.staff = {
     step: 'find', query: '', matches: [], client: null, amount: '', redeem: false, giftId: null, channel: 'store',
-    preview: null, previewError: null, idem: '', result: null, busy: false, recent: keepRecent && S.staff ? S.staff.recent : null,
+    preview: null, previewError: null, idem: '', result: null, busy: false, recent: keepRecent && S.staff ? S.staff.recent : null, recentError: false,
   };
 }
 resetStaff(false);
@@ -55,6 +56,8 @@ resetStaff(false);
 /** Delegated actions: any element with data-act="name" calls actions[name](el, event). */
 export const actions: Record<string, (el: HTMLElement, e: Event) => void | Promise<void>> = {};
 export const changes: Record<string, (el: HTMLInputElement | HTMLSelectElement) => void> = {};
+/** Live `input` handlers (fire while typing; must not re-render the whole screen). */
+export const inputs: Record<string, (el: HTMLInputElement | HTMLSelectElement) => void> = {};
 
 /** Set by main.ts; screens call it to re-render. */
 export const app = { render: () => {}, refresh: async (_animate = false) => {} };

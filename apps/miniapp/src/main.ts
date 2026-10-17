@@ -1,7 +1,7 @@
 /** Entry: boot, auth, routing by role, polling for live client updates, delegated events. */
 import './styles.css';
 import type { ClientSummaryDTO, MeDTO } from '@honey/contracts';
-import { S, actions, changes, app, resetStaff, type OwnerTab } from './state';
+import { S, actions, changes, inputs, app, resetStaff, type OwnerTab } from './state';
 import { applyTheme, THEMES, ACTIVE_THEME } from './config/themes';
 import { T } from './config/texts';
 import { api, ApiErr, getTestUser, setTestUser } from './api';
@@ -14,6 +14,8 @@ import { ownerView, loadOwnerTab } from './screens/owner';
 import { testButton } from './screens/testbar';
 
 const root = document.getElementById('app')!;
+// Older WebViews (iOS < 15.4) lack structuredClone; the rules editor uses it.
+if (typeof (globalThis as { structuredClone?: unknown }).structuredClone !== 'function') (globalThis as { structuredClone?: unknown }).structuredClone = (v: unknown) => JSON.parse(JSON.stringify(v));
 
 /* ---------- theme ---------- */
 try { const t = localStorage.getItem('honey.theme'); if (t && THEMES[t]) S.themeId = t; } catch { /* ignore */ }
@@ -51,8 +53,16 @@ function render() {
     else if (role === 'florist' || role === 'manager') { html = staffView(); key = 's-' + S.staff.step; }
     else { html = (S.owner.tab === 'desk' ? staffView() : ownerView()) + staffNav(role); key = 'o-' + S.owner.tab + (S.owner.tab === 'desk' ? S.staff.step : ''); }
   }
+  // Keep what the user is typing: a late data arrival (recent list, owner tab) must not wipe an input.
+  const active = document.activeElement as HTMLInputElement | null;
+  const keep = active && root.contains(active) && (active.tagName === 'INPUT' || active.tagName === 'SELECT') && active.id
+    ? { id: active.id, value: active.value, start: active.selectionStart, end: active.selectionEnd } : null;
   root.innerHTML = html + testButton();
   root.dataset.view = key;
+  if (keep && prevKey === key) {
+    const el = document.getElementById(keep.id) as HTMLInputElement | null;
+    if (el) { if (el.tagName === 'INPUT' && el.value !== keep.value) el.value = keep.value; el.focus({ preventScroll: true }); try { if (keep.start != null) el.setSelectionRange(keep.start, keep.end); } catch { /* number inputs */ } }
+  }
   const scr = document.getElementById('scr');
   if (scr && prevKey === key) scr.scrollTop = prevScroll;
   setBack();
@@ -87,26 +97,40 @@ actions.testLogin = async () => {
 };
 function errorView() {
   const t = T(S.lang);
-  return `<main class="scr center-all"><div class="onb"><h2 class="disp">${t.errorTitle}</h2><p>${esc(S.fatal ?? '')}</p><button class="b acc" data-act="retry">${t.retry}</button></div></main>`;
+  return `<main class="scr center-all"><div class="onb"><h2 class="disp">${sessionExpired ? t.sessionExpiredTitle : t.errorTitle}</h2><p>${esc(S.fatal ?? '')}</p><button class="b acc" data-act="retry">${sessionExpired && tg.inTelegram ? t.closeApp : t.retry}</button></div></main>`;
 }
-actions.retry = async () => { S.fatal = null; S.loading = true; render(); await refresh(); };
+actions.retry = async () => {
+  if (sessionExpired) { if (tg.inTelegram) { tg.close(); return; } sessionExpired = false; }
+  S.fatal = null; S.loading = true; render(); await refresh();
+};
 
 /* ---------- data ---------- */
 const changed = (a: ClientSummaryDTO, b: ClientSummaryDTO) =>
   a.balance !== b.balance || a.card.filled !== b.card.filled || a.card.cycle !== b.card.cycle || a.level.id !== b.level.id ||
   a.gifts.length !== b.gifts.length || a.gifts.some((g, i) => g.status !== b.gifts[i]?.status) || a.history[0]?.id !== b.history[0]?.id || a.lang !== b.lang;
 
+let refreshSeq = 0;
+let sessionExpired = false;
 async function refresh(animate = true) {
+  if (sessionExpired) return;
+  const my = ++refreshSeq;
   let me: MeDTO;
   try { me = await api.me(); }
   catch (e) {
     const err = e as ApiErr;
+    if (my !== refreshSeq) return; // a newer refresh is in flight; ignore this stale error
     S.loading = false;
+    if (err.status === 401 && (err.code === 'expired' || tg.inTelegram)) {
+      // Telegram only refreshes initData when the Mini App is reopened: stop polling and say so.
+      sessionExpired = true; S.fatal = T(S.lang).sessionExpired; S.me = null; render(); return;
+    }
     if (err.status === 401 && !tg.inTelegram) { S.needsLogin = true; render(); return; }
     if (!S.me) { S.fatal = err.message; render(); } else toast(err.message, 'error');
     return;
   }
+  if (my !== refreshSeq) return; // stale response: a newer one already applied (or will)
   const prev = S.me;
+  if (prev && Date.parse(me.now) < Date.parse(prev.now)) return; // older snapshot than what we show
   const first = !prev;
   S.me = me; S.loading = false; S.fatal = null;
   if (first) S.lang = me.client?.lang ?? ((navigator.language || '').startsWith('uz') ? 'uz' : 'ru');
@@ -132,9 +156,15 @@ document.addEventListener('click', e => {
   const fn = actions[el.dataset.act!];
   if (fn) { e.preventDefault(); Promise.resolve(fn(el, e)).catch(err => toast((err as Error).message || 'Ошибка', 'error')); }
 });
+document.addEventListener('input', e => {
+  const el = (e.target as HTMLElement).closest<HTMLInputElement>('[data-input]');
+  if (el && inputs[el.dataset.input!]) inputs[el.dataset.input!](el);
+});
 document.addEventListener('change', e => {
   const el = (e.target as HTMLElement).closest<HTMLInputElement>('[data-change]');
   if (el && changes[el.dataset.change!]) changes[el.dataset.change!](el);
+  const ei = (e.target as HTMLElement).closest<HTMLInputElement>('[data-input]');
+  if (ei && inputs[ei.dataset.input!]) inputs[ei.dataset.input!](ei);
 });
 document.addEventListener('keydown', e => {
   const t = e.target as HTMLElement;
