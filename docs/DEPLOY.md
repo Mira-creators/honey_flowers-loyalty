@@ -184,45 +184,48 @@ https://honey-loyalty.<ваше-имя>.workers.dev/setup?key=<SETUP_KEY>&owner=
 
 ## Два окружения: заказчик и разработка
 
-| | Заказчик | Разработка (наш полигон) |
+| | Разработка (наш полигон) | Заказчик |
 |---|---|---|
-| Ветка | `main` | `dev` |
-| Worker | `honey-loyalty` | `honey-loyalty-dev` |
-| База D1 | `honey-loyalty-client` (чистая) | `honey-loyalty` (все тестовые данные) |
-| Бот | бот заказчика | `@honeyflowers_test_bot` |
+| Ветка | `dev` | `main` |
+| Worker | `honey-loyalty` | `honeyflowers` |
+| База D1 | `honey-loyalty` (тестовые данные) | `honey-loyalty-client` (чистая) |
+| Бот | `@honeyflowers_test_bot` | бот заказчика |
 
-Правило: в `main` попадает только проверенное. Всё новое сначала в `dev`.
+Оба Worker собираются из одного репозитория. Какой именно получится — решает `apps/worker/scripts/select-env.mjs` по имени ветки, которое Cloudflare передаёт при сборке. Правило: в `main` попадает только проверенное.
 
-### Перенос текущего Worker в роль «разработка» (один раз)
+### Полигон (уже настроен)
 
-Сейчас Worker `honey-loyalty` подключён к ветке `main`, тестовой базе и тестовому боту. Его нужно превратить в `honey-loyalty-dev`, а для заказчика поднять чистый.
+Worker `honey-loyalty` подключён к ветке `dev`. Deploy command у него должен быть:
 
-1. **Worker `honey-loyalty` → Settings → Build:** Production branch поменять на `dev`; Deploy command заменить на `npx wrangler d1 migrations apply honey-loyalty --remote --env dev && npx wrangler deploy --env dev`. Сохранить. После следующего пуша в `dev` в списке Workers появится `honey-loyalty-dev` — это и есть полигон (старый Worker `honey-loyalty` можно затем удалить, его заменит новый для заказчика, или переименовать проект).
-2. **Секреты** для `honey-loyalty-dev`: те же `BOT_TOKEN` (тестовый бот), `WEBHOOK_SECRET`, `SETUP_KEY`, `TEST_KEY`, `PUBLIC_URL` = новый адрес `https://honey-loyalty-dev.<имя>.workers.dev`. Затем открыть `/setup?key=…` у нового адреса — тестовый бот переключится на него.
+```
+node scripts/select-env.mjs && npx wrangler d1 migrations apply honey-loyalty --remote && npx wrangler deploy
+```
 
-### Чистая версия для заказчика (один раз)
+### Версия для заказчика (один раз)
 
-1. **Бот заказчика.** В @BotFather `/newbot`: имя «Honey Flowers», юзернейм вроде `honeyflowers_bot` или `honey_flowers_uz_bot`. Токен сохранить. Лучше создать с аккаунта заказчика или потом передать ему через BotFather → `/mybots` → Transfer Ownership.
-2. **Чистая база.** D1 → Create, имя ровно `honey-loyalty-client`. Database ID вписать в `apps/worker/wrangler.toml` в верхний блок `[[d1_databases]]`.
-3. **Worker заказчика.** Workers & Pages → Create → Import a repository → тот же репозиторий:
+1. **Бот.** В @BotFather `/newbot`: имя «Honey Flowers», юзернейм вроде `honeyflowers_bot`. Токен сохранить. Потом бота можно передать заказчику: BotFather → `/mybots` → бот → Transfer Ownership.
+2. **База.** Storage & Databases → D1 → Create, имя ровно `honey-loyalty-client`. Скопировать Database ID.
+3. **Worker.** Workers & Pages → Create → Import a repository → тот же репозиторий:
 
    | Поле | Значение |
    |---|---|
-   | Project name | `honey-loyalty` (если старый ещё занимает имя — сначала переименовать/удалить его, см. выше) |
+   | Project name | `honeyflowers` |
    | Production branch | `main` |
    | Root directory | `apps/worker` |
    | Build command | `cd ../.. && npm ci && npm run build` |
-   | Deploy command | `npx wrangler d1 migrations apply honey-loyalty-client --remote && npx wrangler deploy` |
+   | Deploy command | `node scripts/select-env.mjs && npx wrangler d1 migrations apply honey-loyalty-client --remote && npx wrangler deploy` |
+   | Build variables | `CLIENT_D1_ID` = Database ID из шага 2 |
 
-4. **Секреты**: новые `BOT_TOKEN` (бот заказчика), `WEBHOOK_SECRET`, `SETUP_KEY`, `TEST_KEY`, `PUBLIC_URL`. Deploy, затем `/setup?key=…`.
+   Переменная сборки задаётся в Settings → Build → Build variables (это не то же самое, что Variables and Secrets). Без неё сборка заказчика намеренно падает.
+4. **Секреты** Worker `honeyflowers`: `BOT_TOKEN` (бот заказчика), `WEBHOOK_SECRET`, `SETUP_KEY`, `TEST_KEY` — новые случайные строки; `PUBLIC_URL` = `https://honeyflowers.<имя>.workers.dev`. Deploy, затем открыть `/setup?key=…`.
 
-Пока идёт тестирование, у заказчика тоже стоит `TEST_MODE = "1"` (кнопка «Тест», переключение ролей). Перед реальным запуском — раздел «Тестовый режим» ниже.
+Пока идёт тестирование, у заказчика тоже `TEST_MODE = "1"`. Перед реальным запуском — раздел «Тестовый режим» ниже.
 
 ### Как работать дальше
 
-- Разработка в ветке `dev`: `git checkout dev`, правки, `git add -A && git commit -m "…" && git push`. Через 2–3 минуты обновляются dev-адрес и тестовый бот.
+- Разработка в ветке `dev`: `git checkout dev`, правки, `git add -A && git commit -m "…" && git push`. Через 2–3 минуты обновляется полигон и тестовый бот.
 - Проверенное переносится заказчику: `git checkout main && git merge dev && git push && git checkout dev`.
-- Базы не пересекаются: эксперименты в dev не трогают клиентов заказчика.
+- Базы не пересекаются.
 
 ## Локальный запуск (для разработчика)
 
