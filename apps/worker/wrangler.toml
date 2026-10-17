@@ -31,7 +31,7 @@ binding = "DB"
 database_name = "honey-loyalty"
 # Put the "Database ID" of YOUR D1 database here (Cloudflare dashboard → Storage & Databases → D1),
 # see docs/DEPLOY.md, step 2. The zero id below works only for local development (`--local`).
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "eda1f266-41a7-4db4-bd94-f3391d7db9b1"
 migrations_dir = "migrations"
 
 # Daily job at 04:00 UTC = 09:00 Asia/Tashkent: points expiry + reminders.
