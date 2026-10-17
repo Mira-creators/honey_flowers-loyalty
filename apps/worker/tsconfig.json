@@ -1,0 +1,20 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "ES2022",
+    "moduleResolution": "Bundler",
+    "rootDir": "../..",
+    "noEmit": true,
+    "declaration": false,
+    "sourceMap": false,
+    "types": ["@cloudflare/workers-types", "@cloudflare/vitest-plugin/types"],
+    "paths": {
+      "@honey/core": ["../../packages/core/src/index.ts"],
+      "@honey/service": ["../../packages/service/src/index.ts"],
+      "@honey/contracts": ["../../packages/contracts/src/index.ts"]
+    }
+  },
+  "include": ["src", "test", "scripts/*.mjs"]
+}

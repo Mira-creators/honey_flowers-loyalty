@@ -9,16 +9,16 @@ afterEach(async () => {
 describe('auth', () => {
   it('POST /auth/telegram registers on first visit and is idempotent', async () => {
     ctx = setup();
-    const first = await ctx.app.inject({ method: 'POST', url: '/auth/telegram', headers: ctx.tma(CLIENT_TG) });
+    const first = await ctx.app.inject({ method: 'POST', url: '/auth/telegram', headers: await ctx.tma(CLIENT_TG) });
     expect(first.statusCode).toBe(200);
     expect(first.json()).toMatchObject({ created: true, staff: null, client: { language: 'ru', hasPhone: false } });
-    const second = await ctx.app.inject({ method: 'POST', url: '/auth/telegram', headers: ctx.tma(CLIENT_TG) });
+    const second = await ctx.app.inject({ method: 'POST', url: '/auth/telegram', headers: await ctx.tma(CLIENT_TG) });
     expect(second.json()).toMatchObject({ created: false, client: { id: first.json().client.id } });
   });
 
   it('accepts initData in the body as well', async () => {
     ctx = setup();
-    const initData = ctx.tma(CLIENT_TG).authorization.slice(4);
+    const initData = (await ctx.tma(CLIENT_TG)).authorization.slice(4);
     const res = await ctx.app.inject({ method: 'POST', url: '/auth/telegram', payload: { initData } });
     expect(res.statusCode).toBe(200);
   });
@@ -27,7 +27,7 @@ describe('auth', () => {
     ctx = setup();
     const none = await ctx.app.inject({ method: 'GET', url: '/me' });
     expect(none.statusCode).toBe(401);
-    const forged = ctx.tma(CLIENT_TG).authorization.replace(/hash=[0-9a-f]{4}/, 'hash=0000');
+    const forged = (await ctx.tma(CLIENT_TG)).authorization.replace(/hash=[0-9a-f]{4}/, 'hash=0000');
     const bad = await ctx.app.inject({ method: 'GET', url: '/me', headers: { authorization: forged } });
     expect(bad.statusCode).toBe(401);
     expect(bad.json().error).toBe('BAD_HASH');
@@ -35,7 +35,7 @@ describe('auth', () => {
 
   it('marks staff in the auth response', async () => {
     ctx = setup();
-    const res = await ctx.app.inject({ method: 'POST', url: '/auth/telegram', headers: ctx.tma(OWNER_TG) });
+    const res = await ctx.app.inject({ method: 'POST', url: '/auth/telegram', headers: await ctx.tma(OWNER_TG) });
     expect(res.json().staff).toMatchObject({ role: 'owner' });
   });
 });
@@ -45,9 +45,9 @@ describe('staff routes', () => {
     ctx = setup();
     const clientId = await ctx.registerClient();
     const payload = { clientId, idempotencyKey: 'order-0001', amount: 200_000 };
-    const asClient = await ctx.app.inject({ method: 'POST', url: '/staff/purchases', headers: ctx.tma(CLIENT_TG), payload });
+    const asClient = await ctx.app.inject({ method: 'POST', url: '/staff/purchases', headers: await ctx.tma(CLIENT_TG), payload });
     expect(asClient.statusCode).toBe(403);
-    const asInactive = await ctx.app.inject({ method: 'POST', url: '/staff/purchases', headers: ctx.tma(1003), payload });
+    const asInactive = await ctx.app.inject({ method: 'POST', url: '/staff/purchases', headers: await ctx.tma(1003), payload });
     expect(asInactive.statusCode).toBe(403);
   });
 
@@ -55,17 +55,17 @@ describe('staff routes', () => {
     ctx = setup();
     const clientId = await ctx.registerClient();
     const payload = { clientId, idempotencyKey: 'order-0001', amount: 450_000 };
-    const res = await ctx.app.inject({ method: 'POST', url: '/staff/purchases', headers: ctx.tma(FLORIST_TG), payload });
+    const res = await ctx.app.inject({ method: 'POST', url: '/staff/purchases', headers: await ctx.tma(FLORIST_TG), payload });
     expect(res.statusCode).toBe(201);
     expect(res.json().purchase.result).toMatchObject({ cashback: 4_500, cell: 1, cellAdvanced: true });
     expect(ctx.notifier.sent.map((e) => e.type)).toEqual(['points_accrued', 'card_advanced']);
 
-    const replay = await ctx.app.inject({ method: 'POST', url: '/staff/purchases', headers: ctx.tma(FLORIST_TG), payload });
+    const replay = await ctx.app.inject({ method: 'POST', url: '/staff/purchases', headers: await ctx.tma(FLORIST_TG), payload });
     expect(replay.statusCode).toBe(200);
     expect(replay.json().replayed).toBe(true);
     expect(replay.json().purchase.id).toBe(res.json().purchase.id);
 
-    const me = await ctx.app.inject({ method: 'GET', url: '/me', headers: ctx.tma(CLIENT_TG) });
+    const me = await ctx.app.inject({ method: 'GET', url: '/me', headers: await ctx.tma(CLIENT_TG) });
     expect(me.statusCode).toBe(200);
     const body = me.json();
     expect(body.balance).toBe(4_500);
@@ -79,19 +79,19 @@ describe('staff routes', () => {
   it('search by phone works with any formatting and needs 4+ digits', async () => {
     ctx = setup();
     await ctx.registerClient(CLIENT_TG, '+998 90 123-45-67');
-    const found = await ctx.app.inject({ method: 'GET', url: '/staff/clients/search?phone=901234567', headers: ctx.tma(FLORIST_TG) });
+    const found = await ctx.app.inject({ method: 'GET', url: '/staff/clients/search?phone=901234567', headers: await ctx.tma(FLORIST_TG) });
     expect(found.json().clients).toHaveLength(1);
     expect(found.json().clients[0]).toMatchObject({ balance: 0, level: 'bee' });
-    const full = await ctx.app.inject({ method: 'GET', url: `/staff/clients/search?phone=${encodeURIComponent('+998901234567')}`, headers: ctx.tma(FLORIST_TG) });
+    const full = await ctx.app.inject({ method: 'GET', url: `/staff/clients/search?phone=${encodeURIComponent('+998901234567')}`, headers: await ctx.tma(FLORIST_TG) });
     expect(full.json().clients).toHaveLength(1);
-    const short = await ctx.app.inject({ method: 'GET', url: '/staff/clients/search?phone=12', headers: ctx.tma(FLORIST_TG) });
+    const short = await ctx.app.inject({ method: 'GET', url: '/staff/clients/search?phone=12', headers: await ctx.tma(FLORIST_TG) });
     expect(short.statusCode).toBe(400);
   });
 
   it('redeem over the cap returns 422; within the cap reduces the balance', async () => {
     ctx = setup();
     const clientId = await ctx.registerClient();
-    const h = ctx.tma(FLORIST_TG);
+    const h = await ctx.tma(FLORIST_TG);
     await ctx.app.inject({ method: 'POST', url: '/staff/purchases', headers: h, payload: { clientId, idempotencyKey: 'order-0001', amount: 5_000_000 } });
     const tooMuch = await ctx.app.inject({
       method: 'POST',
@@ -117,22 +117,22 @@ describe('staff routes', () => {
     const ids: string[] = [];
     for (let d = 1; d <= 3; d++) {
       ctx.clock.set(`2026-11-0${d} 12:00`);
-      const r = await ctx.app.inject({ method: 'POST', url: '/staff/purchases', headers: ctx.tma(FLORIST_TG), payload: { clientId, idempotencyKey: `order-000${d}`, amount: 150_000 } });
+      const r = await ctx.app.inject({ method: 'POST', url: '/staff/purchases', headers: await ctx.tma(FLORIST_TG), payload: { clientId, idempotencyKey: `order-000${d}`, amount: 150_000 } });
       ids.push(r.json().purchase.id);
     }
-    const me = await ctx.app.inject({ method: 'GET', url: '/me', headers: ctx.tma(CLIENT_TG) });
+    const me = await ctx.app.inject({ method: 'GET', url: '/me', headers: await ctx.tma(CLIENT_TG) });
     const gift = me.json().gifts[0];
     expect(gift).toMatchObject({ type: 'free_card', status: 'available' });
     await ctx.app.inject({
       method: 'POST',
       url: '/staff/purchases',
-      headers: ctx.tma(FLORIST_TG),
+      headers: await ctx.tma(FLORIST_TG),
       payload: { clientId, idempotencyKey: 'order-0004', lines: [{ category: 'cards', amount: 20_000 }, { category: 'flowers', amount: 200_000 }], useRewardId: gift.id },
     });
 
-    const noReason = await ctx.app.inject({ method: 'POST', url: `/staff/purchases/${ids[2]}/reverse`, headers: ctx.tma(OWNER_TG), payload: {} });
+    const noReason = await ctx.app.inject({ method: 'POST', url: `/staff/purchases/${ids[2]}/reverse`, headers: await ctx.tma(OWNER_TG), payload: {} });
     expect(noReason.statusCode).toBe(400);
-    const rev = await ctx.app.inject({ method: 'POST', url: `/staff/purchases/${ids[2]}/reverse`, headers: ctx.tma(OWNER_TG), payload: { reason: 'клиент вернул букет' } });
+    const rev = await ctx.app.inject({ method: 'POST', url: `/staff/purchases/${ids[2]}/reverse`, headers: await ctx.tma(OWNER_TG), payload: { reason: 'клиент вернул букет' } });
     expect(rev.statusCode).toBe(200);
     expect(rev.json().purchase.status).toBe('reversed');
     expect(rev.json().warnings.join(' ')).toMatch(/already used/);
@@ -140,7 +140,7 @@ describe('staff routes', () => {
 
   it('returns 404 for an unknown client or purchase', async () => {
     ctx = setup();
-    const h = ctx.tma(FLORIST_TG);
+    const h = await ctx.tma(FLORIST_TG);
     const p = await ctx.app.inject({ method: 'POST', url: '/staff/purchases', headers: h, payload: { clientId: 'nope', idempotencyKey: 'order-0001', amount: 1000 } });
     expect(p.statusCode).toBe(404);
     const r = await ctx.app.inject({ method: 'POST', url: '/staff/purchases/nope/reverse', headers: h, payload: { reason: 'тест' } });
@@ -153,7 +153,7 @@ describe('staff routes', () => {
     const res = await ctx.app.inject({
       method: 'POST',
       url: '/staff/purchases',
-      headers: ctx.tma(FLORIST_TG),
+      headers: await ctx.tma(FLORIST_TG),
       payload: { clientId, idempotencyKey: 'order-0001', amount: 100.5 },
     });
     expect(res.statusCode).toBe(400);
@@ -162,10 +162,10 @@ describe('staff routes', () => {
   it('parallel requests cannot double-spend points (per-client lock)', async () => {
     ctx = setup();
     const clientId = await ctx.registerClient();
-    await ctx.app.inject({ method: 'POST', url: '/staff/purchases', headers: ctx.tma(FLORIST_TG), payload: { clientId, idempotencyKey: 'order-0001', amount: 1_000_000 } });
+    await ctx.app.inject({ method: 'POST', url: '/staff/purchases', headers: await ctx.tma(FLORIST_TG), payload: { clientId, idempotencyKey: 'order-0001', amount: 1_000_000 } });
     // Balance 10 000; two parallel redeems of 10 000 each.
-    const req = (k: string) =>
-      ctx.app.inject({ method: 'POST', url: '/staff/redeem', headers: ctx.tma(FLORIST_TG), payload: { clientId, idempotencyKey: k, points: 10_000, orderAmount: 100_000 } });
+    const req = async (k: string) =>
+      ctx.app.inject({ method: 'POST', url: '/staff/redeem', headers: await ctx.tma(FLORIST_TG), payload: { clientId, idempotencyKey: k, points: 10_000, orderAmount: 100_000 } });
     const [a, b] = await Promise.all([req('redeem-aaaa'), req('redeem-bbbb')]);
     expect([a.statusCode, b.statusCode].sort()).toEqual([200, 422]);
   });
@@ -175,7 +175,7 @@ describe('scheduler job', () => {
   it('runExpiryForAll sends warnings and expires points', async () => {
     ctx = setup();
     const clientId = await ctx.registerClient();
-    await ctx.app.inject({ method: 'POST', url: '/staff/purchases', headers: ctx.tma(FLORIST_TG), payload: { clientId, idempotencyKey: 'order-0001', amount: 500_000 } });
+    await ctx.app.inject({ method: 'POST', url: '/staff/purchases', headers: await ctx.tma(FLORIST_TG), payload: { clientId, idempotencyKey: 'order-0001', amount: 500_000 } });
     ctx.clock.set('2027-01-16 10:00');
     expect((await ctx.service.runExpiryForAll()).map((e) => e.type)).toEqual(['expiry_warning']);
     expect(await ctx.service.runExpiryForAll()).toEqual([]);

@@ -2,20 +2,27 @@
   "name": "honey-loyalty",
   "version": "0.1.0",
   "private": true,
-  "description": "Honey Flowers loyalty program (Telegram Mini App): rules engine, API, DB schema",
+  "description": "Honey Flowers loyalty program (Telegram Mini App): rules engine, service layer, Cloudflare Worker + D1",
   "type": "module",
   "workspaces": [
+    "packages/contracts",
     "packages/core",
-    "apps/api"
+    "packages/service",
+    "apps/api",
+    "apps/worker",
+    "apps/miniapp"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
-    "build": "npm run build -w @honey/core && npm run build -w @honey/api",
+    "build": "node scripts/build.mjs",
     "test": "npm run test --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "dev:api": "npm run build -w @honey/core && npm run dev -w @honey/api"
+    "dev": "npm run dev -w @honey/worker",
+    "dev:api": "npm run build -w @honey/core && npm run build -w @honey/service && npm run dev -w @honey/api",
+    "deploy": "npm run deploy -w @honey/worker",
+    "db:migrate:remote": "npm run db:migrate:remote -w @honey/worker"
   },
   "devDependencies": {
     "@types/node": "^22.20.5",

@@ -1,0 +1,4 @@
+# Copy to .dev.vars for `npm run dev -w apps/worker` (never commit .dev.vars).
+BOT_TOKEN=123456789:replace-with-real-token
+WEBHOOK_SECRET=local-webhook-secret
+SETUP_KEY=local-setup-key

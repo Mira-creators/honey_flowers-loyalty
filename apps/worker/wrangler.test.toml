@@ -1,0 +1,14 @@
+# Config used only by vitest (no static assets, so tests do not need apps/miniapp/dist).
+name = "honey-loyalty-test"
+main = "src/index.ts"
+compatibility_date = "2026-09-30"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "honey-loyalty"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
+
+[vars]
+TEST_MODE = "1"
+BOT_USERNAME = ""

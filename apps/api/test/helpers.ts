@@ -1,8 +1,6 @@
 import { defaultRules, type LoyaltyRules } from '@honey/core';
 import { buildApp } from '../src/app.js';
-import { InMemoryRepository } from '../src/repo/inMemory.js';
-import { MemoryNotifier } from '../src/services/notifier.js';
-import { buildInitData } from '../src/telegram/initData.js';
+import { buildInitData, InMemoryRepository, MemoryNotifier } from '@honey/service';
 
 export const BOT_TOKEN = '7000000001:AAH-test-token-for-api-tests';
 export const FLORIST_TG = 1001;
@@ -32,21 +30,21 @@ export function setup(rules: LoyaltyRules = defaultRules) {
   const { app, service } = buildApp({ repo, botToken: BOT_TOKEN, notifier, clock: clock.fn });
 
   /** Authorization header for a Telegram user, signed "now". */
-  const tma = (telegramId: number, extra: Record<string, unknown> = {}) => ({
+  const tma = async (telegramId: number, extra: Record<string, unknown> = {}) => ({
     authorization:
       'tma ' +
-      buildInitData(
+      (await buildInitData(
         {
           auth_date: String(Math.floor(clock.now.getTime() / 1000)),
           user: JSON.stringify({ id: telegramId, first_name: 'Тест', language_code: 'ru', ...extra }),
         },
         BOT_TOKEN,
-      ),
+      )),
   });
 
   /** Register a client via the API and give them a phone (no phone endpoint yet). */
   const registerClient = async (telegramId = CLIENT_TG, phone = '+998 90 123-45-67') => {
-    const res = await app.inject({ method: 'POST', url: '/auth/telegram', headers: tma(telegramId) });
+    const res = await app.inject({ method: 'POST', url: '/auth/telegram', headers: await tma(telegramId) });
     const id = res.json().client.id as string;
     await repo.updateClient(id, { phone });
     return id;

@@ -4,94 +4,124 @@
 Две механики: **соты**: карта из 10 покупок, в некоторых ячейках спрятаны подарки; **мёд**: кешбэк баллами (1 мёд = 1 сум), процент зависит от уровня клиента (1% → 3% → 5%).
 Флорист находит клиента по телефону или QR и вводит сумму покупки. Сервер начисляет мёд, двигает пчёлку по сотам и выдаёт подарки, а бот присылает клиенту уведомление.
 
-> Статус: начальный каркас. Движок правил и API работают и покрыты тестами, хранение пока только в памяти.
-> Все числа в правилах — заглушки, пока клиент не ответит на анкету (см. таблицу ниже).
+> Статус: **тестовая версия на Cloudflare**. Один Worker отдаёт Mini App, JSON API и вебхук бота, раз в сутки запускает cron. База данных — Cloudflare D1.
+> Все числа в правилах пока заглушки: их заменят ответы клиента на анкету (таблица ниже). Владелец может менять их в приложении, каждое изменение создаёт новую версию правил.
+>
+> **Как выложить:** [docs/DEPLOY.md](docs/DEPLOY.md) — пошаговая инструкция «по кнопкам».
+
+## Архитектура
+
+```
+Telegram ──► бот (вебхук) ─┐
+Mini App ──► /api/*  ──────┼──► apps/worker (Hono на Cloudflare Workers)
+cron 09:00 Ташкент ────────┘        │  LoyaltyService (packages/service): загрузить → движок → сохранить → уведомить
+                                    │  движок правил (packages/core): чистые функции, без IO и без часов
+                                    ▼
+                              Cloudflare D1 (SQLite)      статика Mini App (apps/miniapp/dist)
+```
+
+- **Один Worker, один адрес.** Запросы на `/api/*`, `/telegram/*`, `/setup` и `/health` обрабатывает код Worker'а. Все остальные пути отдают статику Mini App с SPA-fallback на `index.html`.
+- **Контракт фронтенда и бэкенда** описан в `packages/contracts` (`@honey/contracts`, только типы). Mini App и Worker импортируют одни и те же типы.
+- **Конкурентность без блокировок.** В D1 нет `SELECT … FOR UPDATE`. Поэтому каждая команда сохраняется одним `db.batch([...])` (это транзакция), и первым запросом пакет вставляет `(client_id, загруженная_версия + 1)` в `client_versions`. Если параллельный запрос уже записал эту версию, срабатывает первичный ключ, весь пакет откатывается, и сервис повторяет команду на свежих данных, не больше 3 раз. Списать один и тот же мёд дважды так нельзя (есть тест).
+- **Уведомления.** Сообщения в бот уходят после записи в базу, в фоне (`ctx.waitUntil`). Ошибка Telegram не ломает покупку и записывается в `notifications_log`.
+- **Часы.** Везде используется `now = реальное время + settings.clock_offset_days`. В тестовом режиме время можно «перемотать» (`/api/test/clock`).
 
 ## Карта папок
 
 ```
 honey-loyalty/
-├── packages/core/          # «Мозг»: чистый движок правил, без IO и без Date.now()
-│   ├── src/
-│   │   ├── rules.ts        # LoyaltyRules: zod-схема конфига + parseRules()
-│   │   ├── defaultRules.ts # значения по умолчанию (у каждого поля — номер вопроса анкеты)
-│   │   ├── types.ts        # ClientState, PurchaseRecord, LedgerEntry, Reward, CardMove…
-│   │   ├── state.ts        # производные: balanceFromLedger, deriveLevel, cardPosition, expiryInfo
-│   │   ├── events.ts       # типы уведомлений (reward_unlocked, level_up, expiry_warning…)
-│   │   ├── outcome.ts      # Outcome — результат команды + applyOutcome()
-│   │   ├── time.ts         # календарные дни в Asia/Tashkent
-│   │   ├── money.ts        # целочисленные проценты (floor)
-│   │   └── commands/       # applyPurchase, redeem, reversePurchase, runExpiry, registerClient, manualAdjust
-│   └── test/               # vitest: правила, соты, мёд, списание, сгорание, отмена, идемпотентность
-├── apps/api/               # HTTP API на Fastify
-│   ├── src/
-│   │   ├── telegram/initData.ts   # проверка подписи Telegram WebApp initData
-│   │   ├── auth.ts                # заголовок "Authorization: tma <initData>", проверка ролей
-│   │   ├── repo/                  # интерфейс Repository + InMemoryRepository
-│   │   ├── services/              # LoyaltyService (загрузить → движок → сохранить → уведомить)
-│   │   ├── routes/                # /auth/telegram, /me, /staff/*
-│   │   ├── app.ts                 # сборка приложения (для сервера и тестов)
-│   │   └── server.ts              # точка входа
-│   └── test/               # тесты initData + интеграционные через fastify.inject
-├── db/migrations/001_init.sql     # схема PostgreSQL 16
-├── docker-compose.yml      # postgres:16 (на будущее, API пока работает без БД)
-└── .env.example
+├── packages/
+│   ├── core/               # «Мозг»: чистый движок правил, без IO и без Date.now()
+│   │   ├── src/rules.ts, defaultRules.ts, types.ts, state.ts, events.ts, outcome.ts, time.ts, money.ts
+│   │   ├── src/commands/   # applyPurchase, redeem, reversePurchase, runExpiry, registerClient, manualAdjust
+│   │   └── test/           # vitest: правила, соты, мёд, списание, сгорание, отмена, идемпотентность
+│   ├── service/            # @honey/service: общий слой для api и worker
+│   │   ├── src/repository.ts        # интерфейс Repository (+ версии состояния, ConcurrencyError)
+│   │   ├── src/loyaltyService.ts    # LoyaltyService.execute(): оптимистичная конкурентность + повторы
+│   │   ├── src/notifier.ts          # абстракция уведомлений
+│   │   ├── src/inMemoryRepository.ts
+│   │   ├── src/phone.ts             # нормализация +998…, маска телефона
+│   │   └── src/telegram/initData.ts # проверка подписи initData (Web Crypto: Node и Workers)
+│   └── contracts/          # @honey/contracts: HTTP-контракт Mini App ⇄ Worker (только типы)
+├── apps/
+│   ├── worker/             # ★ Cloudflare Worker (Hono + grammY + D1) — то, что выкладывается
+│   │   ├── wrangler.toml            # assets, D1, cron, vars; секреты — в панели Cloudflare
+│   │   ├── migrations/0001_init.sql # схема D1 (перевод db/migrations/001_init.sql на SQLite)
+│   │   ├── src/index.ts             # fetch (Hono) + scheduled (cron)
+│   │   ├── src/app.ts               # маршруты, ошибки, CORS для localhost в TEST_MODE
+│   │   ├── src/auth.ts              # tma initData / X-Test-User, роли
+│   │   ├── src/db/d1Repository.ts   # Repository на D1
+│   │   ├── src/routes/              # client, staff, owner, test, setup
+│   │   ├── src/bot/                 # grammY-бот, тексты ru/uz, уведомления, Bot API
+│   │   ├── src/lib/                 # DTO-маппинг, подарки, редактор правил, ошибки
+│   │   └── test/                    # vitest в настоящем рантайме Workers с локальной D1
+│   ├── miniapp/            # фронтенд Mini App (делается параллельно; dist/ отдаётся Worker'ом)
+│   └── api/                # первый каркас на Fastify + память (для локальных экспериментов, тесты сохранены)
+├── db/migrations/001_init.sql   # схема PostgreSQL (на будущее, если переедем с D1)
+└── docs/DEPLOY.md          # как выложить на Cloudflare (по-русски, по шагам)
 ```
 
 ## Как запустить
 
-Нужен Node.js 20+ (проверено на 22).
+Нужен Node.js 22+.
 
 ```bash
-npm install
-npm test            # все тесты (core + api)
-npm run build       # сборка TypeScript в dist/
-npm run typecheck   # проверка типов, включая тесты
+npm ci
+npm test            # все тесты: core, service, api, worker (worker — в рантайме workerd с локальной D1)
+npm run build       # пакеты + Mini App (если есть) + проверка типов Worker'а
+npm run dev         # wrangler dev --local на http://127.0.0.1:8787 (сначала применяет миграции к локальной D1)
+npm run deploy      # wrangler deploy (нужен `npx wrangler login`); обычно деплой идёт через Workers Builds
 ```
 
-Запуск API:
+Для `npm run dev` скопируйте `apps/worker/.dev.vars.example` в `apps/worker/.dev.vars`. Без бота можно проверять всё через заголовок `X-Test-User` (примеры curl есть в [docs/DEPLOY.md](docs/DEPLOY.md#локальный-запуск-для-разработчика)).
+Если `apps/miniapp/dist` ещё нет, `apps/worker/scripts/ensure-assets.mjs` создаст страницу-заглушку, и wrangler не упадёт.
 
-```bash
-cp .env.example .env      # впишите BOT_TOKEN своего бота
-npm run dev:api           # http://localhost:3000, перезапуск при изменениях
-```
+### Авторизация и роли
 
-Сейчас API хранит данные **в памяти**: после перезапуска всё пропадает. `DATABASE_URL` пока не используется.
-Чтобы проверить staff-маршруты локально, добавьте сотрудников через переменную окружения:
-`DEV_STAFF="123456789:owner:Амалия,987654321:florist:Флорист"` (telegram_id:роль:имя).
+Mini App передаёт в каждом запросе `Authorization: tma <Telegram.WebApp.initData>`. Подпись проверяется по `BOT_TOKEN` по алгоритму из документации Telegram, `auth_date` должен быть не старше 24 часов.
+В тестовом режиме (`TEST_MODE = "1"`) вместо этого можно передать `X-Test-User: <telegramId>` и, необязательно, `X-Test-Name`.
 
-### Авторизация
+Роль: в тестовом режиме сначала смотрим выбранную через `/api/test/role`, иначе активную запись в `staff`, иначе `client`. Вне тестового режима учитывается только таблица `staff`.
+Сотрудников добавляет владелец (`POST /api/owner/staff`). Первого владельца можно назначить ссылкой `/setup?key=…&owner=<телефон или Telegram ID>`.
 
-Mini App передаёт `window.Telegram.WebApp.initData` в каждом запросе:
-
-```
-Authorization: tma <initData>
-```
-
-Сервер проверяет подпись так, как описано в документации Telegram: `secret = HMAC_SHA256("WebAppData", BOT_TOKEN)`, затем `HMAC_SHA256(secret, data_check_string)`. Ещё он проверяет свежесть `auth_date` (по умолчанию не старше 24 часов, меняется через `INIT_DATA_MAX_AGE`).
-Для тестов и ручной отладки есть `buildInitData()` в `apps/api/src/telegram/initData.ts`: она подписывает тестовые данные вашим токеном.
-
-### Маршруты
+### Маршруты (контракт — `packages/contracts/src/index.ts`)
 
 | Метод | Путь | Кто | Что делает |
 |---|---|---|---|
-| POST | `/auth/telegram` | любой | вход; при первом визите создаёт клиента и начисляет приветственный бонус |
-| GET | `/me` | клиент | баланс, уровень и прогресс до следующего, соты и номер карты, подарки, дата сгорания |
-| POST | `/staff/purchases` | сотрудник | покупка: `{clientId, idempotencyKey, amount \| lines, channel, redeemPoints?, useRewardId?}` |
-| POST | `/staff/redeem` | сотрудник | списать мёд или выдать подарок без регистрации покупки |
-| POST | `/staff/purchases/:id/reverse` | сотрудник | отмена покупки, `{reason}` обязателен |
-| GET | `/staff/clients/search?phone=` | сотрудник | поиск по телефону (минимум 4 цифры, формат любой) |
+| GET | `/api/me` | любой | кто я, роль, моя карта (`ClientSummaryDTO`), публичные правила, серверное «сейчас» |
+| POST | `/api/me/lang` | любой | язык `ru` / `uz` |
+| GET | `/api/staff/client?q=` | сотрудник | поиск по коду `HF1234`, QR (`HF:HF1234`) или цифрам телефона |
+| POST | `/api/staff/purchase/preview` | сотрудник | расчёт покупки без сохранения |
+| POST | `/api/staff/purchase` | сотрудник | покупка (идемпотентно по `idempotencyKey`) |
+| POST | `/api/staff/purchase/:id/reverse` | сотрудник | отмена с причиной; повторная отмена → 409 `already_reversed` |
+| POST | `/api/staff/gift/:id/use` | сотрудник | выдать подарок без покупки |
+| GET | `/api/staff/recent` | сотрудник | последние 20 операций |
+| GET | `/api/owner/stats` | владелец | статистика |
+| GET / PUT | `/api/owner/rules` | владелец | правила; PUT создаёт **новую версию** (старые покупки сохраняют свою) |
+| GET / POST / DELETE | `/api/owner/staff` | владелец | сотрудники |
+| GET | `/api/owner/operations?limit=` | владелец | журнал операций |
+| POST | `/api/test/role`, `/clock`, `/run-expiry`, `/reset-me`, `/register` | любой, только TEST_MODE | роль, перемотка времени, ночная задача, сброс себя, регистрация из браузера |
+| POST | `/telegram/webhook` | Telegram | бот (секрет в `X-Telegram-Bot-Api-Secret-Token`) |
+| GET | `/setup?key=` | админ | вебхук, команды, кнопка меню (один раз после деплоя) |
 
-Ошибки бизнес-правил возвращаются как `{error: CODE, message}`: 422 — превышен лимит списания или не хватает баланса, 409 — подарок уже использован или конфликт idempotencyKey.
+Ошибки возвращаются как `{ error: { code, message } }`. `message` написан по-русски, его можно показывать сотруднику. Коды: 400 `validation`, 401 `unauthorized`, 403 `forbidden`, 404 `not_found`, 409 `conflict` / `already_reversed`, 422 `insufficient_points`.
+
+### Бот
+
+`/start` — приветствие (ru + строка на uz), кнопка «📱 Поделиться номером» и кнопка «🐝 Открыть медовую карту».
+Контакт принимается, только если пользователь отправил **свой** номер. Бот приводит его к виду `+998…`, создаёт клиента с кодом `HF` + 4–6 цифр и начисляет приветственный бонус через движок.
+`/card` — кнопка карты. `/lang` — выбор языка. Все тексты на ru и uz лежат в `apps/worker/src/bot/texts.ts`.
+Бот присылает уведомления о начислении, открытом подарке, новом уровне, скором сгорании, сгорании и отмене покупки.
 
 ## Как устроен конфиг правил
 
 - Все настраиваемые числа и флаги лежат в одном объекте `LoyaltyRules` (`packages/core/src/rules.ts`). Его проверяет zod-схема: пороги уровней должны идти по возрастанию, подарки — стоять внутри карты, часовой пояс — существовать.
 - Значения по умолчанию — `packages/core/src/defaultRules.ts`. Возле каждого поля в комментарии указан номер вопроса анкеты, ответ на который его определяет.
-- Правила **версионируются**: поле `version` и таблица `rules_versions` (`rules jsonb`, `active_from`). Каждая покупка сохраняет `rules_version_id`, поэтому при смене процентов старые покупки не пересчитываются.
+- Правила **версионируются**: поле `version` и таблица `rules_versions` (JSON правил). Текущую версию указывает `settings.rules_version`. Каждая покупка сохраняет `rules_version_id`, поэтому при смене процентов старые покупки не пересчитываются. Версию 1 (`defaultRules`) Worker записывает в базу при первом обращении.
+- Владелец редактирует часть правил через `GET/PUT /api/owner/rules` (`EditableRulesDTO`): уровни, минимум для соты, лимит сот в день, лимит оплаты мёдом, срок сгорания и напоминания, приветственный бонус, подарки в сотах. Коды подарков: `card`, `delivery`, `discN` (скидка N%), `mini`.
 - Движок чистый: команда получает `(rules, state, input, now)` и возвращает `Outcome` — новые записи журнала мёда, ходы по сотам, открытые подарки, смену уровня, события для уведомлений и `warnings`. Сохранение и отправку делает API.
 - Баланс нигде не хранится отдельно: он равен сумме журнала `points_ledger`. Журнал только дополняется, в БД это обеспечивает триггер.
-- Все «дни» (лимит сот в день, сгорание через 90 дней, окно уровня) считаются по календарю **Asia/Tashkent**, а не по UTC.
+- Все «дни» (лимит сот в день, сгорание через 90 дней, окно уровня) считаются по календарю **Asia/Tashkent**, а не по UTC. Cron `0 4 * * *` (UTC) запускается в 09:00 по Ташкенту.
 
 ### Вопрос анкеты → поле конфига
 
@@ -125,8 +155,9 @@ Authorization: tma <initData>
 
 ## Что ещё не сделано
 
-- **Postgres-репозиторий**: реализация `Repository` поверх `db/migrations/001_init.sql`. Каждая команда — в одной транзакции с `SELECT … FOR UPDATE` по клиенту. Сейчас работает только `InMemoryRepository`.
-- **Бот (grammY)**: `/start`, кнопка Mini App, запрос телефона (`request_contact`; эндпоинта для сохранения телефона пока нет), отправка уведомлений из событий `Outcome` и запись в `notifications_log`.
-- **Планировщик**: ежедневный запуск `LoyaltyService.runExpiryForAll()` для сгорания и напоминаний. Метод есть, cron к нему не подключён.
-- **Фронтенд Mini App**: экраны клиента (соты с пчёлкой, мёд, подарки, QR) и режим флориста. Поиск клиента по QR тоже не сделан.
-- **Админка владельца**: статистика, редактирование правил с созданием новой версии, сотрудники, журнал операций, рассылки.
+- **Фронтенд Mini App** (`apps/miniapp`) делается параллельно по контракту `@honey/contracts`.
+- **Категории покупки.** API принимает одну сумму и считает её «цветами». Строки по категориям (доставка, открытки) движок поддерживает, но в контракт они пока не выведены.
+- **Ручная корректировка баланса** (`manualAdjust`, перенос старой базы): в движке есть, HTTP-маршрута нет.
+- **Подарок на день рождения и «важные даты»**: таблица есть, логики нет.
+- **Рассылки владельца**: нет.
+- **Postgres** (`db/migrations/001_init.sql`, `docker-compose.yml`) оставлен на случай переезда с D1, сейчас не используется.

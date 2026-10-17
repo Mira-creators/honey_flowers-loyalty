@@ -2,8 +2,7 @@ import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { buildApp } from './app.js';
 import { loadConfig } from './config.js';
-import { InMemoryRepository } from './repo/inMemory.js';
-import { LogNotifier } from './services/notifier.js';
+import { InMemoryRepository, LogNotifier } from '@honey/service';
 
 /**
  * Entry point. Until the Postgres repository exists the API runs on the

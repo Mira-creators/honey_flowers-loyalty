@@ -1,0 +1,17 @@
+{
+  "name": "@honey/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "description": "HTTP contract (types only) between the Mini App and the Worker",
+  "type": "module",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts"
+    }
+  },
+  "files": ["src"],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  }
+}

@@ -1,0 +1,144 @@
+import type { EditableRulesDTO, OwnerStatsDTO, StaffDTO } from '@honey/contracts';
+import { localDateKey } from '@honey/core';
+import { normalizePhone, type StaffMember } from '@honey/service';
+import { Hono } from 'hono';
+import { z } from 'zod';
+import { requireRole, type Vars } from '../auth.js';
+import type { AppContext } from '../context.js';
+import { DAY_MS } from '../lib/clock.js';
+import { tashkentDayStartIso } from '../lib/dto.js';
+import { HttpError } from '../lib/errors.js';
+import { applyEditable, toEditable } from '../lib/rulesEditor.js';
+import { operationsFor } from '../lib/summary.js';
+
+export const ownerRoutes = new Hono<{ Variables: Vars }>();
+
+ownerRoutes.use('*', async (c, next) => {
+  requireRole(c, ['owner']);
+  await next();
+});
+
+// ------------------------------------------------------------ stats
+
+/** Monday (Tashkent local date) of the week containing `d`. */
+function weekStartKey(d: Date): string {
+  const key = localDateKey(d, 'Asia/Tashkent');
+  const day = new Date(`${key}T00:00:00Z`);
+  const dow = (day.getUTCDay() + 6) % 7; // 0 = Monday
+  return new Date(day.getTime() - dow * DAY_MS).toISOString().slice(0, 10);
+}
+
+ownerRoutes.get('/stats', async (c) => {
+  const app = c.get('app');
+  const now = app.now();
+  const thisWeek = weekStartKey(now);
+  const weeks = Array.from({ length: 8 }, (_, i) => new Date(new Date(`${thisWeek}T00:00:00Z`).getTime() - (7 - i) * 7 * DAY_MS).toISOString().slice(0, 10));
+  const since8w = tashkentDayStartIso(weeks[0]!);
+  const iso = (ms: number) => new Date(ms).toISOString();
+  const r = await app.repo.statsRows(now.toISOString(), iso(now.getTime() - 7 * DAY_MS), iso(now.getTime() - 90 * DAY_MS), since8w);
+  const perWeek = new Map(weeks.map((w) => [w, 0]));
+  for (const at of r.weekly) {
+    const w = weekStartKey(new Date(at));
+    if (perWeek.has(w)) perWeek.set(w, perWeek.get(w)! + 1);
+  }
+  const buyers = Number(r.repeat.buyers ?? 0);
+  const body: OwnerStatsDTO = {
+    clients: Number(r.counts.clients),
+    clientsNew7d: Number(r.counts.clients_new_7d),
+    purchases: Number(r.counts.purchases),
+    purchases7d: Number(r.counts.purchases_7d),
+    revenueWithCard: Number(r.counts.revenue),
+    repeatRate90d: buyers ? Number(r.repeat.repeaters) / buyers : 0,
+    points: {
+      accrued: Number(r.points.accrued),
+      redeemed: Number(r.points.redeemed),
+      expired: Number(r.points.expired),
+      outstanding: Number(r.points.outstanding),
+    },
+    giftsUnlocked: Number(r.gifts.unlocked),
+    giftsUsed: Number(r.gifts.used),
+    perWeek: weeks.map((w) => ({ weekStart: w, purchases: perWeek.get(w)! })),
+  };
+  return c.json(body);
+});
+
+// ------------------------------------------------------------ rules
+
+ownerRoutes.get('/rules', async (c) => {
+  const { rules } = await c.get('app').repo.getActiveRules();
+  return c.json(toEditable(rules) satisfies EditableRulesDTO);
+});
+
+/** PUT /api/owner/rules — validates and stores a NEW rules version (old purchases keep theirs). */
+ownerRoutes.put('/rules', async (c) => {
+  const app = c.get('app');
+  const caller = c.get('caller');
+  const { rules: current } = await app.repo.getActiveRules();
+  const next = applyEditable(current, await c.req.json());
+  await app.repo.createRulesVersion(next, caller.staff?.id ?? `tg:${caller.telegramId}`, app.now());
+  return c.json(toEditable(next) satisfies EditableRulesDTO);
+});
+
+// ------------------------------------------------------------ staff
+
+function staffDTO(s: StaffMember): StaffDTO {
+  return { id: s.id, telegramId: s.telegramId, name: s.name, role: s.role, active: s.active };
+}
+
+ownerRoutes.get('/staff', async (c) => {
+  return c.json((await c.get('app').repo.listStaff()).map(staffDTO));
+});
+
+const addStaffSchema = z.object({
+  phoneOrTelegramId: z.union([z.string().trim().min(1), z.number().int().positive()]),
+  role: z.enum(['florist', 'manager', 'owner']),
+  name: z.string().trim().max(60).optional(),
+});
+
+async function resolveStaffTarget(app: AppContext, raw: string | number) {
+  const s = String(raw).trim();
+  const digits = s.replace(/\D/g, '');
+  // A phone looks like +998…, 9 digits national or 12 digits with 998. Plain numbers otherwise = telegram id.
+  const looksLikePhone = s.startsWith('+') || /^998\d{9}$/.test(digits) || /^\d{9}$/.test(digits) || /[\s()-]/.test(s);
+  if (looksLikePhone) {
+    const phone = normalizePhone(s);
+    if (!phone) throw new HttpError(400, 'validation', 'Не похоже на номер телефона');
+    const client = await app.repo.findClientByPhone(phone);
+    const user = client ? await app.repo.getTgUser(client.telegramId) : null;
+    return { telegramId: client?.telegramId ?? null, phone, name: client?.name ?? user?.firstName ?? null };
+  }
+  const id = Number(digits);
+  if (!Number.isSafeInteger(id) || id <= 0) throw new HttpError(400, 'validation', 'Укажите телефон или Telegram ID');
+  const client = await app.repo.findClientByTelegramId(id);
+  const user = await app.repo.getTgUser(id);
+  return { telegramId: id, phone: client?.phone ?? null, name: client?.name ?? user?.firstName ?? null };
+}
+
+ownerRoutes.post('/staff', async (c) => {
+  const app = c.get('app');
+  const body = addStaffSchema.parse(await c.req.json());
+  const target = await resolveStaffTarget(app, body.phoneOrTelegramId);
+  const name = body.name || target.name || (target.phone ? `Сотрудник ${target.phone.slice(-4)}` : `Сотрудник ${target.telegramId}`);
+  const member = await app.repo.upsertStaff({ telegramId: target.telegramId, phone: target.phone, name, role: body.role }, app.now());
+  return c.json(staffDTO(member), 201);
+});
+
+ownerRoutes.delete('/staff/:id', async (c) => {
+  const app = c.get('app');
+  const caller = c.get('caller');
+  const target = await app.repo.findStaffById(c.req.param('id'));
+  if (!target) throw new HttpError(404, 'not_found', 'Сотрудник не найден');
+  if (target.role === 'owner' && target.active && (await app.repo.countActiveOwners()) <= 1 && !app.testMode) {
+    throw new HttpError(409, 'conflict', 'Нельзя отключить последнего владельца');
+  }
+  if (caller.staff?.id === target.id && !app.testMode) throw new HttpError(409, 'conflict', 'Нельзя отключить самого себя');
+  const updated = await app.repo.deactivateStaff(target.id);
+  return c.json(staffDTO(updated!));
+});
+
+// ------------------------------------------------------------ operations
+
+ownerRoutes.get('/operations', async (c) => {
+  const limit = z.coerce.number().int().min(1).max(500).catch(100).parse(c.req.query('limit') ?? 100);
+  return c.json(await operationsFor(c.get('app'), limit));
+});

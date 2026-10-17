@@ -3,3 +3,7 @@ dist/
 .env
 *.log
 coverage/
+.wrangler/
+.dev.vars
+# Mini App placeholder created by apps/worker/scripts/ensure-assets.mjs (the real app commits its own sources, not dist)
+apps/miniapp/dist/

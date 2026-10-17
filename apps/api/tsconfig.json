@@ -4,7 +4,8 @@
     "rootDir": "../..",
     "noEmit": true,
     "paths": {
-      "@honey/core": ["../../packages/core/src/index.ts"]
+      "@honey/core": ["../../packages/core/src/index.ts"],
+      "@honey/service": ["../../packages/service/src/index.ts"]
     }
   },
   "include": ["src", "test"]

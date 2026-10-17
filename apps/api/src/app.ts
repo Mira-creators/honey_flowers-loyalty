@@ -2,11 +2,9 @@ import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastif
 import { LoyaltyError, type LoyaltyErrorCode } from '@honey/core';
 import { ZodError } from 'zod';
 import { HttpError, type AuthContext } from './auth.js';
-import type { Repository } from './repo/types.js';
 import { clientRoutes } from './routes/client.js';
 import { staffRoutes } from './routes/staff.js';
-import { LoyaltyService, NotFoundError } from './services/loyaltyService.js';
-import { MemoryNotifier, type Notifier } from './services/notifier.js';
+import { LoyaltyService, MemoryNotifier, NotFoundError, type Notifier, type Repository } from '@honey/service';
 
 export interface AppDeps {
   repo: Repository;

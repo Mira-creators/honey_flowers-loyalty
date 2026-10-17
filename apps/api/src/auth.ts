@@ -1,6 +1,5 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import type { ClientProfile, Repository, StaffMember, StaffRole } from './repo/types.js';
-import { InitDataError, validateInitData, type ValidatedInitData } from './telegram/initData.js';
+import { InitDataError, validateInitData, type ClientProfile, type Repository, type StaffMember, type StaffRole, type ValidatedInitData } from '@honey/service';
 
 /**
  * Authentication: every request carries the Mini App's raw initData:
@@ -33,10 +32,10 @@ export function readInitData(req: FastifyRequest): string | null {
   return null;
 }
 
-export function authenticate(raw: string | null, ctx: AuthContext): ValidatedInitData {
+export async function authenticate(raw: string | null, ctx: AuthContext): Promise<ValidatedInitData> {
   if (!raw) throw new HttpError(401, 'UNAUTHORIZED', 'missing "Authorization: tma <initData>" header');
   try {
-    return validateInitData(raw, ctx.botToken, { now: ctx.clock(), maxAgeSeconds: ctx.maxAgeSeconds });
+    return await validateInitData(raw, ctx.botToken, { now: ctx.clock(), maxAgeSeconds: ctx.maxAgeSeconds });
   } catch (e) {
     if (e instanceof InitDataError) throw new HttpError(401, e.code, e.message);
     throw e;
@@ -44,7 +43,7 @@ export function authenticate(raw: string | null, ctx: AuthContext): ValidatedIni
 }
 
 export async function requireClient(req: FastifyRequest, repo: Repository, ctx: AuthContext): Promise<ClientProfile> {
-  const tg = authenticate(readInitData(req), ctx);
+  const tg = await authenticate(readInitData(req), ctx);
   const client = await repo.findClientByTelegramId(tg.user.id);
   if (!client) throw new HttpError(404, 'NOT_REGISTERED', 'call POST /auth/telegram first');
   return client;
@@ -56,7 +55,7 @@ export async function requireStaff(
   ctx: AuthContext,
   roles: readonly StaffRole[] = ['florist', 'manager', 'owner'],
 ): Promise<StaffMember> {
-  const tg = authenticate(readInitData(req), ctx);
+  const tg = await authenticate(readInitData(req), ctx);
   const staff = await repo.findStaffByTelegramId(tg.user.id);
   if (!staff || !staff.active) throw new HttpError(403, 'FORBIDDEN', 'staff access only');
   if (!roles.includes(staff.role)) throw new HttpError(403, 'FORBIDDEN', `requires role: ${roles.join(' | ')}`);

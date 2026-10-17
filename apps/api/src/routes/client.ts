@@ -1,8 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { authenticate, readInitData, requireClient, type AuthContext } from '../auth.js';
-import type { Repository } from '../repo/types.js';
-import type { LoyaltyService } from '../services/loyaltyService.js';
+import type { LoyaltyService, Repository } from '@honey/service';
 
 const SUPPORTED_LANGUAGES = ['ru', 'uz', 'en'];
 
@@ -14,7 +13,7 @@ export function clientRoutes(app: FastifyInstance, deps: { repo: Repository; ser
    */
   app.post('/auth/telegram', async (req) => {
     const body = z.object({ initData: z.string().min(1) }).partial().parse(req.body ?? {});
-    const tg = authenticate(body.initData ?? readInitData(req), deps.auth);
+    const tg = await authenticate(body.initData ?? readInitData(req), deps.auth);
     const name = [tg.user.first_name, tg.user.last_name].filter(Boolean).join(' ') || null;
     const lang = tg.user.language_code?.slice(0, 2);
     const { client, created } = await deps.service.registerOrGet({

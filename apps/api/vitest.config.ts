@@ -3,9 +3,10 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   resolve: {
-    // Test against core sources, so `npm test` works without a prior build.
+    // Test against package sources, so `npm test` works without a prior build.
     alias: {
       '@honey/core': fileURLToPath(new URL('../../packages/core/src/index.ts', import.meta.url)),
+      '@honey/service': fileURLToPath(new URL('../../packages/service/src/index.ts', import.meta.url)),
     },
   },
   test: {

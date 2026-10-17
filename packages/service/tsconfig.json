@@ -1,0 +1,11 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "../..",
+    "noEmit": true,
+    "paths": {
+      "@honey/core": ["../../packages/core/src/index.ts"]
+    }
+  },
+  "include": ["src", "test"]
+}

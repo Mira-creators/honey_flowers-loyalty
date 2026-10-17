@@ -1,0 +1,53 @@
+# Cloudflare Worker "honey-loyalty": Mini App static files + JSON API + Telegram bot webhook + daily cron.
+# Step-by-step deploy guide (Russian): docs/DEPLOY.md
+name = "honey-loyalty"
+main = "src/index.ts"
+compatibility_date = "2026-09-30"
+# nodejs_compat is not needed: the code uses only Web APIs (fetch, Web Crypto).
+
+# Variables set in the Cloudflare dashboard are kept on deploy
+# (PUBLIC_URL, BOT_USERNAME may be filled there instead of here).
+keep_vars = true
+
+# Bundle workspace packages from their TypeScript sources (no prior `tsc` build of packages needed).
+[alias]
+"@honey/core" = "../../packages/core/src/index.ts"
+"@honey/service" = "../../packages/service/src/index.ts"
+
+[observability]
+enabled = true
+
+# Static Mini App, built by `npm run build -w apps/miniapp` into apps/miniapp/dist.
+# scripts/ensure-assets.mjs creates a placeholder page if the folder does not exist yet.
+[assets]
+directory = "../miniapp/dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+# These paths go to the Worker code first; everything else is served from the static files.
+run_worker_first = ["/api/*", "/telegram/*", "/setup", "/health"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "honey-loyalty"
+# Put the "Database ID" of YOUR D1 database here (Cloudflare dashboard → Storage & Databases → D1),
+# see docs/DEPLOY.md, step 2. The zero id below works only for local development (`--local`).
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
+
+# Daily job at 04:00 UTC = 09:00 Asia/Tashkent: points expiry + reminders.
+[triggers]
+crons = ["0 4 * * *"]
+
+[vars]
+# "1" = test version (X-Test-User header, role switching, test clock, /api/test/*). "0" for production.
+TEST_MODE = "1"
+# Bot username without "@"; may stay empty: GET /setup fills it from Telegram.
+BOT_USERNAME = ""
+
+# Secrets — NEVER commit them. Dashboard → Worker → Settings → Variables and Secrets (type "Secret"),
+# or `npx wrangler secret put <NAME>`. For local dev put them into apps/worker/.dev.vars.
+#   BOT_TOKEN       token from @BotFather
+#   WEBHOOK_SECRET  random string (A–Z, a–z, 0–9, _ and -), Telegram echoes it in every webhook call
+#   SETUP_KEY       random string that protects GET /setup?key=...
+# Optional plain variable:
+#   PUBLIC_URL      https://honey-loyalty.<subdomain>.workers.dev (otherwise taken from the /setup request)

@@ -1,16 +1,17 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
-
 /**
  * Validation of Telegram Mini App `initData`
  * (https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app).
  *
- *   secret_key       = HMAC_SHA256(key = "WebAppData", message = bot_token)
+ *   secret_key        = HMAC_SHA256(key = "WebAppData", message = bot_token)
  *   data_check_string = all received fields except `hash`, sorted by key,
  *                       as "key=value" joined with "\n" (values URL-decoded)
- *   valid            ⇔ hex(HMAC_SHA256(key = secret_key, message = data_check_string)) == hash
+ *   valid             ⇔ hex(HMAC_SHA256(key = secret_key, message = data_check_string)) == hash
  *
  * Plus a freshness check of `auth_date` so a leaked initData string cannot be
  * replayed forever.
+ *
+ * Uses Web Crypto (`crypto.subtle`) only, so the same code runs on Node 20+
+ * and on Cloudflare Workers. All functions that touch crypto are async.
  */
 
 export interface TelegramUser {
@@ -54,9 +55,30 @@ export interface ValidateOptions {
   clockSkewSeconds?: number;
 }
 
+const encoder = new TextEncoder();
+
+async function hmacSha256(key: Uint8Array, message: string): Promise<Uint8Array> {
+  const cryptoKey = await crypto.subtle.importKey('raw', key as Uint8Array<ArrayBuffer>, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  return new Uint8Array(await crypto.subtle.sign('HMAC', cryptoKey, encoder.encode(message)));
+}
+
+function toHex(bytes: Uint8Array): string {
+  let out = '';
+  for (const b of bytes) out += b.toString(16).padStart(2, '0');
+  return out;
+}
+
+/** Constant-time comparison of two strings of equal length. */
+export function timingSafeEqualStr(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
 /** secret_key = HMAC_SHA256(key="WebAppData", data=bot_token). */
-export function webAppSecretKey(botToken: string): Buffer {
-  return createHmac('sha256', 'WebAppData').update(botToken).digest();
+export async function webAppSecretKey(botToken: string): Promise<Uint8Array> {
+  return hmacSha256(encoder.encode('WebAppData'), botToken);
 }
 
 export function dataCheckString(params: URLSearchParams): string {
@@ -68,28 +90,27 @@ export function dataCheckString(params: URLSearchParams): string {
 }
 
 /** Compute the `hash` for a set of fields (used by tests and dev tools). */
-export function signInitData(fields: Record<string, string>, botToken: string): string {
+export async function signInitData(fields: Record<string, string>, botToken: string): Promise<string> {
   const params = new URLSearchParams(fields);
-  return createHmac('sha256', webAppSecretKey(botToken)).update(dataCheckString(params)).digest('hex');
+  return toHex(await hmacSha256(await webAppSecretKey(botToken), dataCheckString(params)));
 }
 
 /** Build a complete signed initData query string (tests / local dev). */
-export function buildInitData(fields: Record<string, string>, botToken: string): string {
+export async function buildInitData(fields: Record<string, string>, botToken: string): Promise<string> {
   const params = new URLSearchParams(fields);
-  params.set('hash', signInitData(fields, botToken));
+  params.set('hash', await signInitData(fields, botToken));
   return params.toString();
 }
 
-export function validateInitData(initData: string, botToken: string, opts: ValidateOptions): ValidatedInitData {
+export async function validateInitData(initData: string, botToken: string, opts: ValidateOptions): Promise<ValidatedInitData> {
   if (!botToken) throw new Error('BOT_TOKEN is not configured');
   const params = new URLSearchParams(initData);
   const hash = params.get('hash');
   if (!hash) throw new InitDataError('MISSING_HASH', 'initData has no hash');
   if (!/^[0-9a-f]{64}$/i.test(hash)) throw new InitDataError('BAD_HASH', 'initData hash is malformed');
 
-  const expected = createHmac('sha256', webAppSecretKey(botToken)).update(dataCheckString(params)).digest();
-  const given = Buffer.from(hash, 'hex');
-  if (given.length !== expected.length || !timingSafeEqual(given, expected)) {
+  const expected = toHex(await hmacSha256(await webAppSecretKey(botToken), dataCheckString(params)));
+  if (!timingSafeEqualStr(hash.toLowerCase(), expected)) {
     throw new InitDataError('BAD_HASH', 'initData signature is invalid');
   }
 

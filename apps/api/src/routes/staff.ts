@@ -2,8 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { CATEGORIES } from '@honey/core';
 import { HttpError, requireStaff, type AuthContext } from '../auth.js';
-import type { Repository } from '../repo/types.js';
-import type { LoyaltyService } from '../services/loyaltyService.js';
+import type { LoyaltyService, Repository } from '@honey/service';
 
 const uzs = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 

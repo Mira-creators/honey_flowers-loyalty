@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import {
   applyOutcome,
   defaultRules,
@@ -8,27 +7,26 @@ import {
   type Outcome,
   type PurchaseRecord,
 } from '@honey/core';
-import type { ClientProfile, NewClient, Repository, RulesVersion, StaffMember } from './types.js';
-
-export function phoneDigits(phone: string): string {
-  return phone.replace(/\D/g, '');
-}
-
-/** Last 9 digits = Uzbek national number without +998. */
-function nationalPart(digits: string): string {
-  return digits.length > 9 ? digits.slice(-9) : digits;
-}
+import {
+  ConcurrencyError,
+  type ClientProfile,
+  type NewClient,
+  type Repository,
+  type RulesVersion,
+  type StaffMember,
+  type VersionedState,
+} from './repository.js';
+import { nationalPart, phoneDigits } from './phone.js';
 
 /**
- * In-memory repository: lets the API run and be tested without a database.
+ * In-memory repository: lets apps/api run and be tested without a database.
  * Data is lost on restart. Not for production.
  */
 export class InMemoryRepository implements Repository {
   private rulesVersions: RulesVersion[] = [];
   private clients = new Map<string, ClientProfile>();
   private staff = new Map<number, StaffMember>();
-  private states = new Map<string, ClientState>();
-  private locks = new Map<string, Promise<unknown>>();
+  private states = new Map<string, VersionedState>();
   private ledgerSeq = 0;
 
   constructor(opts: { rules?: LoyaltyRules; staff?: Omit<StaffMember, 'id'>[] } = {}) {
@@ -38,8 +36,8 @@ export class InMemoryRepository implements Repository {
   }
 
   addStaff(s: Omit<StaffMember, 'id'>): StaffMember {
-    const member = { ...s, id: randomUUID() };
-    this.staff.set(s.telegramId, member);
+    const member = { ...s, id: crypto.randomUUID() };
+    if (s.telegramId !== null) this.staff.set(s.telegramId, member);
     return member;
   }
 
@@ -73,9 +71,9 @@ export class InMemoryRepository implements Repository {
 
   async createClient(input: NewClient): Promise<ClientProfile> {
     if (await this.findClientByTelegramId(input.telegramId)) throw new Error('telegram_id already registered');
-    const client: ClientProfile = { id: randomUUID(), birthday: null, ...input };
+    const client: ClientProfile = { id: crypto.randomUUID(), birthday: null, code: '', ...input };
     this.clients.set(client.id, client);
-    this.states.set(client.id, emptyClientState(client.id, input.createdAt));
+    this.states.set(client.id, { state: emptyClientState(client.id, input.createdAt), version: 0 });
     return client;
   }
 
@@ -91,49 +89,45 @@ export class InMemoryRepository implements Repository {
     return this.staff.get(telegramId) ?? null;
   }
 
-  async loadClientState(clientId: string): Promise<ClientState> {
+  async loadClientState(clientId: string): Promise<VersionedState> {
     const s = this.states.get(clientId);
     if (!s) throw new Error(`client ${clientId} not found`);
     return structuredClone(s);
   }
 
-  async saveOutcome(clientId: string, outcome: Outcome): Promise<void> {
+  async saveOutcome(clientId: string, outcome: Outcome, expectedVersion: number): Promise<void> {
     const s = this.states.get(clientId);
     if (!s) throw new Error(`client ${clientId} not found`);
+    if (s.version !== expectedVersion) throw new ConcurrencyError();
     const withIds: Outcome = {
       ...outcome,
       ledger: outcome.ledger.map((e) => ({ ...e, id: e.id ?? String(++this.ledgerSeq) })),
     };
-    this.states.set(clientId, applyOutcome(s, structuredClone(withIds)));
+    this.states.set(clientId, { state: applyOutcome(s.state, structuredClone(withIds)), version: s.version + 1 });
   }
 
   async findPurchaseById(purchaseId: string): Promise<PurchaseRecord | null> {
-    for (const s of this.states.values()) {
-      const p = s.purchases.find((x) => x.id === purchaseId);
+    for (const { state } of this.states.values()) {
+      const p = state.purchases.find((x) => x.id === purchaseId);
       if (p) return structuredClone(p);
     }
     return null;
   }
 
   async findPurchaseByIdempotencyKey(key: string): Promise<PurchaseRecord | null> {
-    for (const s of this.states.values()) {
-      const p = s.purchases.find((x) => x.idempotencyKey === key);
+    for (const { state } of this.states.values()) {
+      const p = state.purchases.find((x) => x.idempotencyKey === key);
       if (p) return structuredClone(p);
     }
     return null;
   }
 
-  async withClientLock<T>(clientId: string, fn: () => Promise<T>): Promise<T> {
-    const prev = this.locks.get(clientId) ?? Promise.resolve();
-    const run = prev.then(fn, fn);
-    this.locks.set(
-      clientId,
-      run.catch(() => undefined),
-    );
-    return run;
-  }
-
   async allClientIds(): Promise<string[]> {
     return [...this.clients.keys()];
+  }
+
+  /** Raw state (tests). */
+  peekState(clientId: string): ClientState | undefined {
+    return this.states.get(clientId)?.state;
   }
 }
