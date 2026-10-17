@@ -26,7 +26,6 @@ tg.ready(); paintTheme(); tg.onThemeChanged(paintTheme);
 
 /* ---------- navigation for staff roles ---------- */
 const NAV: Record<string, Array<[OwnerTab, string, string]>> = {
-  manager: [['desk', 'Касса', IC.card], ['ops', 'Журнал', IC.list]],
   owner: [['desk', 'Касса', IC.card], ['stats', 'Статистика', IC.stats], ['rules', 'Правила', IC.rules], ['staff', 'Команда', IC.people], ['ops', 'Журнал', IC.list]],
 };
 function staffNav(role: string) {
@@ -49,7 +48,7 @@ function render() {
   else {
     const role = S.me.role;
     if (role === 'client') { html = clientView(); key = 'c-' + (S.me.registered ? S.screen : 'onb'); }
-    else if (role === 'florist') { html = staffView(); key = 's-' + S.staff.step; }
+    else if (role === 'florist' || role === 'manager') { html = staffView(); key = 's-' + S.staff.step; }
     else { html = (S.owner.tab === 'desk' ? staffView() : ownerView()) + staffNav(role); key = 'o-' + S.owner.tab + (S.owner.tab === 'desk' ? S.staff.step : ''); }
   }
   root.innerHTML = html + testButton();
@@ -63,7 +62,7 @@ app.render = render;
 function setBack() {
   if (!S.me) return tg.backButton(null);
   if (S.me.role === 'client' && S.me.registered && S.screen !== 'home') return tg.backButton(() => { S.screen = 'home'; render(); });
-  if (S.me.role !== 'client' && (S.me.role === 'florist' || S.owner.tab === 'desk') && S.staff.step !== 'find') return tg.backButton(() => { resetStaff(); render(); loadRecent(); });
+  if (S.me.role !== 'client' && (S.me.role === 'florist' || S.me.role === 'manager' || S.owner.tab === 'desk') && S.staff.step !== 'find') return tg.backButton(() => { resetStaff(); render(); loadRecent(); });
   tg.backButton(null);
 }
 
@@ -113,7 +112,6 @@ async function refresh(animate = true) {
     if (me.role === 'owner' && S.owner.tab === 'desk' && first) S.owner.tab = 'stats';
     if (me.role === 'florist' || me.role === 'manager' || (me.role === 'owner' && S.owner.tab === 'desk')) loadRecent();
     if (me.role === 'owner' && S.owner.tab !== 'desk') loadOwnerTab();
-    if (me.role === 'manager' && S.owner.tab !== 'desk' && S.owner.tab !== 'ops') S.owner.tab = 'desk';
     return render();
   }
   if (me.role === 'client' && prev?.client && me.client && prev.registered && me.registered) {

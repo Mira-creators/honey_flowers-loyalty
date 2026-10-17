@@ -69,15 +69,15 @@ function rulesView() {
 
 function teamView() {
   const list = S.owner.staffList;
-  const roles: Record<StaffDTO['role'], string> = { florist: 'Флорист', manager: 'Менеджер', owner: 'Владелец' };
+  const roles: Record<StaffDTO['role'], string> = { florist: 'Сотрудник', manager: 'Сотрудник', owner: 'Владелец' };
   return `<h2 class="h disp">Команда</h2>${errBox()}
-    <p class="mut" style="margin-top:-6px">Флорист начисляет и отменяет покупки. Менеджер ещё видит журнал. Владелец меняет правила и команду.</p>
+    <p class="mut" style="margin-top:-6px">Сотрудник начисляет и отменяет покупки. Владелец ещё видит статистику, журнал и меняет правила и команду.</p>
     <div class="list">${list ? (list.length ? list.map(s => `<div class="it"><div class="ic">${esc(s.name.slice(0, 1))}</div><div><div class="t">${esc(s.name)}</div><div class="s">${roles[s.role]}${s.telegramId ? ' · id ' + s.telegramId : ' · ждёт входа в бота'}</div></div><button class="link bad" data-act="removeStaff" data-id="${esc(s.id)}">Убрать</button></div>`).join('') : '<p class="mut">Пока никого. Добавьте флориста ниже.</p>') : '<p class="mut">Загрузка…</p>'}</div>
     <div class="sub">Добавить сотрудника</div>
     <div class="form"><label class="fl" for="newStaff">Телефон (как в Telegram) или Telegram ID</label><input id="newStaff" inputmode="tel" placeholder="+998 90 123 45 67" autocomplete="off">
-      <label class="fl" for="newRole">Роль</label><select id="newRole"><option value="florist">Флорист</option><option value="manager">Менеджер</option><option value="owner">Владелец</option></select>
+      <label class="fl" for="newRole">Роль</label><select id="newRole"><option value="florist">Сотрудник</option><option value="owner">Владелец</option></select>
       <button class="b acc full" data-act="addStaff" style="margin-top:8px">Добавить</button>
-      <p class="mut" style="font-size:12px">Сотрудник должен один раз открыть бота и поделиться номером — после этого роль включится сама.</p></div>`;
+      <p class="mut" style="font-size:12px">Человек должен один раз открыть бота и поделиться номером — после этого роль включится сама.</p></div>`;
 }
 
 function opsView() {

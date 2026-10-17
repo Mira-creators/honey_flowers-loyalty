@@ -8,7 +8,7 @@ import { esc, fmt, toast, sheet, closeLayer, debounce } from '../ui/dom';
 import { IC } from '../ui/icons';
 
 const dt = (iso: string) => new Date(iso).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
-const roleName = () => ({ florist: 'Флорист', manager: 'Менеджер', owner: 'Владелец', client: 'Клиент' }[S.me!.role]);
+const roleName = () => ({ florist: 'Сотрудник', manager: 'Сотрудник', owner: 'Владелец', client: 'Клиент' }[S.me!.role]);
 
 export function staffView(): string {
   const st = S.staff;

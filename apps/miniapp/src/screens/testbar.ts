@@ -8,7 +8,7 @@ import { esc, toast, sheet, closeLayer, fmt } from '../ui/dom';
 
 export const testButton = () => S.me?.testMode ? `<button class="test-fab" data-act="openTest" aria-label="Панель тестирования">🧪 Тест</button>` : '';
 
-const ROLES: Array<[Role, string]> = [['client', 'Клиент'], ['florist', 'Флорист'], ['manager', 'Менеджер'], ['owner', 'Владелец']];
+const ROLES: Array<[Role, string]> = [['client', 'Клиент'], ['florist', 'Сотрудник'], ['owner', 'Владелец']];
 
 function panelHtml() {
   const me = S.me!;
