@@ -109,11 +109,12 @@ function planPurchase(
   purchaseId: string,
   idempotencyKey: string,
   staffId: string | null,
+  now: Date,
 ): PlannedPurchase {
   const lines = linesOf(req.amount);
   const giftId = req.giftId ?? null;
   const prior = state.purchases.find((p) => p.idempotencyKey === idempotencyKey);
-  const maxRedeem = maxRedeemable(rules, state, lines, giftId);
+  const maxRedeem = maxRedeemable(rules, state, lines, giftId, now);
   // On a replay reuse what was redeemed originally, so the engine recognises the same request.
   const redeemPoints = prior ? prior.pointsRedeemed : req.redeem ? maxRedeem : 0;
   return {
@@ -143,7 +144,7 @@ staffRoutes.post('/purchase/preview', async (c) => {
   const now = app.now();
   const { rules } = await app.repo.getActiveRules(now);
   const { state } = await app.repo.loadClientState(req.clientId);
-  const plan = planPurchase(rules, state, req, 'preview', `preview-${crypto.randomUUID()}`, null);
+  const plan = planPurchase(rules, state, req, 'preview', `preview-${crypto.randomUUID()}`, null, now);
   const outcome = applyPurchase(rules, state, plan.input, now);
   const body: PurchasePreviewDTO = previewFromSummary(outcome.purchase!.result!, plan.maxRedeem, outcome.rewardsUnlocked);
   return c.json(body);
@@ -161,7 +162,7 @@ staffRoutes.post('/purchase', async (c) => {
   const staff = actingStaff(caller);
   const purchaseId = crypto.randomUUID();
   const res = await app.service.execute<{ maxRedeem: number }>(req.clientId, ({ rules, state, now }) => {
-    const plan = planPurchase(rules, state, req, purchaseId, req.idempotencyKey, staff.id);
+    const plan = planPurchase(rules, state, req, purchaseId, req.idempotencyKey, staff.id, now);
     const prior = state.purchases.find((p) => p.idempotencyKey === req.idempotencyKey);
     if (prior && (prior.amount !== req.amount || (prior.rewardUsedId ?? null) !== (req.giftId ?? null))) {
       throw new LoyaltyError('IDEMPOTENCY_CONFLICT', 'same idempotencyKey, different purchase');

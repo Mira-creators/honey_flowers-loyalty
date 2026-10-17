@@ -4,11 +4,15 @@
  * BigInt to avoid float error and overflow. All rounding is floor.
  */
 
-/** floor(amount * pct / 100) for a non-negative integer amount. */
+/**
+ * floor(amount * pct / 100) for a non-negative integer amount. `pct` may have
+ * up to 2 decimals (the rules schema enforces it); finer precision is kept
+ * exactly by scaling to 1/10000 of a percent, never rounded up.
+ */
 export function percentOf(amount: number, pct: number): number {
   if (amount <= 0 || pct <= 0) return 0;
-  const bps = BigInt(Math.round(pct * 100));
-  return Number((BigInt(amount) * bps) / 10_000n);
+  const scaled = BigInt(Math.floor(pct * 10_000 + 1e-6));
+  return Number((BigInt(amount) * scaled) / 1_000_000n);
 }
 
 /** floor(a * b / c) with exact integer arithmetic. */

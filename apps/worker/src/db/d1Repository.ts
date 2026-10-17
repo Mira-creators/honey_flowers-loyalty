@@ -117,6 +117,12 @@ function ledgerFromRow(r: Row): LedgerEntry {
   };
 }
 
+function overrideFromRow(c: Row): ClientState['levelOverride'] {
+  if (!c.level_override) return null;
+  const idx = c.level_override_index === null || c.level_override_index === undefined ? undefined : num(c.level_override_index);
+  return { levelId: String(c.level_override), setAt: date(c.level_override_at), ...(idx !== undefined ? { levelIndex: idx } : {}) };
+}
+
 function moveFromRow(r: Row): CardMove {
   return {
     clientId: String(r.client_id),
@@ -507,7 +513,7 @@ export class D1Repository implements Repository {
 
   private stateStatements(clientId: string): D1PreparedStatement[] {
     return [
-      this.db.prepare('SELECT created_at, level_override, level_override_at FROM clients WHERE id = ?').bind(clientId),
+      this.db.prepare('SELECT created_at, level_override, level_override_at, level_override_index FROM clients WHERE id = ?').bind(clientId),
       this.db.prepare('SELECT COALESCE(MAX(version), 0) AS v FROM client_versions WHERE client_id = ?').bind(clientId),
       this.db.prepare('SELECT * FROM purchases WHERE client_id = ? ORDER BY created_at, rowid').bind(clientId),
       this.db.prepare('SELECT * FROM points_ledger WHERE client_id = ? ORDER BY rowid').bind(clientId),
@@ -525,7 +531,7 @@ export class D1Repository implements Repository {
     const state: ClientState = {
       clientId,
       registeredAt: date(c.created_at),
-      levelOverride: c.level_override ? { levelId: String(c.level_override), setAt: date(c.level_override_at) } : null,
+      levelOverride: overrideFromRow(c),
       purchases: purchases!.results.map(purchaseFromRow),
       ledger: ledger!.results.map(ledgerFromRow),
       cardMoves: moves!.results.map(moveFromRow),
@@ -538,7 +544,7 @@ export class D1Repository implements Repository {
   /** Bulk load for the daily job. */
   async loadAllClientStates(): Promise<Map<string, VersionedState>> {
     const [clients, versions, purchases, ledger, moves, rewards, keys] = await this.db.batch<Row>([
-      this.db.prepare('SELECT id, created_at, level_override, level_override_at FROM clients ORDER BY created_at'),
+      this.db.prepare('SELECT id, created_at, level_override, level_override_at, level_override_index FROM clients ORDER BY created_at'),
       this.db.prepare('SELECT client_id, MAX(version) AS v FROM client_versions GROUP BY client_id'),
       this.db.prepare('SELECT * FROM purchases ORDER BY created_at, rowid'),
       this.db.prepare('SELECT * FROM points_ledger ORDER BY rowid'),
@@ -554,7 +560,7 @@ export class D1Repository implements Repository {
         state: {
           clientId: id,
           registeredAt: date(c.created_at),
-          levelOverride: c.level_override ? { levelId: String(c.level_override), setAt: date(c.level_override_at) } : null,
+          levelOverride: overrideFromRow(c),
           purchases: [],
           ledger: [],
           cardMoves: [],
@@ -681,8 +687,8 @@ export class D1Repository implements Repository {
     if (o.levelOverride !== undefined) {
       stmts.push(
         db
-          .prepare('UPDATE clients SET level_override = ?, level_override_at = ? WHERE id = ?')
-          .bind(o.levelOverride?.levelId ?? null, isoOrNull(o.levelOverride?.setAt ?? null), clientId),
+          .prepare('UPDATE clients SET level_override = ?, level_override_at = ?, level_override_index = ? WHERE id = ?')
+          .bind(o.levelOverride?.levelId ?? null, isoOrNull(o.levelOverride?.setAt ?? null), o.levelOverride?.levelIndex ?? null, clientId),
       );
     }
     const keyAt = iso(new Date());

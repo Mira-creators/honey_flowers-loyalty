@@ -35,29 +35,39 @@ export function rewardId(cycle: number, cell: number, purchaseId: string): strin
   return `${cycle}-${cell}-${purchaseId}`;
 }
 
-/** Card moves made by purchases on the same local calendar day as `now`. */
+/**
+ * Card moves made by ACTIVE purchases on the same local calendar day as `now`.
+ * A reversed purchase never uses up a daily slot, even if its step stayed on
+ * the card because later purchases moved on.
+ */
 export function cellMovesOnDay(rules: LoyaltyRules, state: ClientState, now: Date): number {
   const today = localDateKey(now, rules.timezone);
+  const active = new Set(state.purchases.filter((p) => p.status === 'active').map((p) => p.id));
   return activeCardMoves(state).filter(
-    (m) => m.reason === 'purchase' && localDateKey(m.createdAt, rules.timezone) === today,
+    (m) => m.reason === 'purchase' && active.has(m.purchaseId!) && localDateKey(m.createdAt, rules.timezone) === today,
   ).length;
 }
 
 /**
  * How many points the client may spend on an order (for the staff UI):
  * min(balance, maxRedeemPct of the order, order minus gift discount).
+ * Overdue expiry is settled first (in memory), exactly as applyPurchase does,
+ * so the returned value is always accepted by applyPurchase at the same `now`.
  */
 export function maxRedeemable(
   rules: LoyaltyRules,
   state: ClientState,
   lines: readonly PurchaseLine[],
-  rewardIdToUse: string | null = null,
+  rewardIdToUse: string | null,
+  now: Date,
 ): Uzs {
-  const amount = lines.reduce((s, l) => s + l.amount, 0);
-  const reward = rewardIdToUse ? state.rewards.find((r) => r.id === rewardIdToUse) ?? null : null;
+  const s = applyOutcome(state, settleExpiry(rules, state, now));
+  const amount = lines.reduce((sum, l) => sum + l.amount, 0);
+  const reward = rewardIdToUse ? s.rewards.find((r) => r.id === rewardIdToUse) ?? null : null;
   if (reward?.type === 'discount_pct' && !rules.allowDiscountWithPoints) return 0;
+  if (reward && reward.status !== 'available') return 0;
   const discount = rewardEffect(reward, lines, amount).discount;
-  return Math.max(0, Math.min(balanceFromLedger(state.ledger), redeemCap(rules, amount, discount)));
+  return Math.max(0, Math.min(balanceFromLedger(s.ledger), redeemCap(rules, amount, discount)));
 }
 
 function sameRequest(p: PurchaseRecord, input: PurchaseInput, amount: Uzs): boolean {
@@ -81,7 +91,7 @@ function sameRequest(p: PurchaseRecord, input: PurchaseInput, amount: Uzs): bool
  *  6. level after the purchase → `level_up` event (applies from the next one).
  */
 export function applyPurchase(rules: LoyaltyRules, state: ClientState, input: PurchaseInput, now: Date): Outcome {
-  const amount = validateLines(input.lines);
+  const amount = validateLines(rules, input.lines);
   assert(input.idempotencyKey, 'INVALID_INPUT', 'idempotencyKey is required');
 
   // 1. Idempotency: same key → original result, no new effects.

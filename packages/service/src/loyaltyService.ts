@@ -163,7 +163,10 @@ export class LoyaltyService {
 
   /**
    * Registration with a phone (Telegram contact / test register): creates the
-   * client or attaches the phone, then credits the welcome bonus once.
+   * client or attaches the phone. The welcome bonus is credited only when the
+   * client is created (or when the phone is attached for the first time — the
+   * moment registration actually completes); re-sharing the contact later
+   * never credits a bonus enabled after signup.
    * Returns the welcome bonus credited by THIS call (0 if none / already).
    */
   async registerWithPhone(input: { telegramId: number; name: string | null; phone: string; language: string }): Promise<{
@@ -178,6 +181,7 @@ export class LoyaltyService {
 
     let client = await this.repo.findClientByTelegramId(input.telegramId);
     let created = false;
+    let completesRegistration = false;
     if (!client) {
       client = await this.repo.createClient({
         telegramId: input.telegramId,
@@ -188,13 +192,16 @@ export class LoyaltyService {
         createdAt: this.clock(),
       });
       created = true;
+      completesRegistration = true;
     } else if (client.phone !== input.phone || (!client.name && input.name)) {
+      completesRegistration = client.phone === null;
       client = await this.repo.updateClient(client.id, {
         phone: input.phone,
         name: client.name ?? input.name,
         consentAt: client.consentAt ?? this.clock(),
       });
     }
+    if (!completesRegistration) return { client, created, welcomeBonus: 0 };
     const res = await this.execute(client.id, ({ rules, state, now }) => registerClient(rules, state, now));
     const welcome = res.outcome.ledger.find((e) => e.type === 'welcome')?.amount ?? 0;
     return { client, created, welcomeBonus: welcome };
@@ -296,7 +303,9 @@ export class LoyaltyService {
         now,
       ),
     );
-    return { replayed: outcome.replayed, purchase: publicPurchase(outcome.purchase!), events: outcome.events };
+    const purchase = outcome.purchase!;
+    // A replay of a purchase that was reversed meanwhile is surfaced explicitly.
+    return { replayed: outcome.replayed, status: purchase.status, purchase: publicPurchase(purchase), events: outcome.events };
   }
 
   async redeem(staff: StaffMember, input: { clientId: string; idempotencyKey: string; points?: Uzs; orderAmount?: Uzs; rewardId?: string | null; reason?: string | null }) {
@@ -337,8 +346,13 @@ export class LoyaltyService {
     );
   }
 
-  /** Daily job: expiry + warnings for every client. Returns the events produced. */
-  async runExpiryForAll(): Promise<LoyaltyEvent[]> {
+  /**
+   * Daily job: expiry + warnings for every client. Returns the events produced.
+   * One failing client (e.g. permanently busy) never stops the others: the
+   * error is reported via `onClientError` (default: console.error) and the
+   * loop continues.
+   */
+  async runExpiryForAll(onClientError?: (clientId: string, err: unknown) => void): Promise<LoyaltyEvent[]> {
     const events: LoyaltyEvent[] = [];
     const now = this.clock();
     const { rules } = await this.repo.getActiveRules(now);
@@ -347,10 +361,15 @@ export class LoyaltyService {
     const bulk = this.repo.loadAllClientStates ? await this.repo.loadAllClientStates() : null;
     const ids = bulk ? [...bulk.keys()] : await this.repo.allClientIds();
     for (const id of ids) {
-      const pre = bulk?.get(id);
-      if (pre && !hasEffects(runExpiry(rules, pre.state, now))) continue;
-      const { outcome } = await this.execute(id, ({ rules: r, state, now: n }) => runExpiry(r, state, n));
-      events.push(...outcome.events);
+      try {
+        const pre = bulk?.get(id);
+        if (pre && !hasEffects(runExpiry(rules, pre.state, now))) continue;
+        const { outcome } = await this.execute(id, ({ rules: r, state, now: n }) => runExpiry(r, state, n));
+        events.push(...outcome.events);
+      } catch (err) {
+        if (onClientError) onClientError(id, err);
+        else console.error(`daily expiry failed for client ${id}`, err);
+      }
     }
     return events;
   }

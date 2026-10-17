@@ -30,6 +30,8 @@ export const defaultRules: LoyaltyRules = {
 
   // Q8: how much of an order may be paid with мёд (30% / 50% / no limit=100).
   maxRedeemPct: 50,
+  // ours (antifraud / typo guard): a single purchase cannot exceed this amount.
+  maxPurchaseAmount: 100_000_000,
   // Q11: may the 10% discount and мёд be used in the same order.
   allowDiscountWithPoints: false,
   // Q12: welcome bonus at registration, сум (0 = no bonus).

@@ -1,24 +1,33 @@
 import { emptyOutcome, type Outcome } from '../outcome.js';
 import type { LoyaltyRules } from '../rules.js';
-import { balanceFromLedger, cardPosition, deriveLevel, expiryInfo } from '../state.js';
+import { balanceFromLedger, cardPosition, deriveLevel, expiryInfo, lastExpiry } from '../state.js';
 import type { ClientState } from '../types.js';
 
 /**
- * Has expiry already been applied for the current activity anchor?
- * Derived from stored facts, so re-running the scheduler is harmless.
+ * Which parts of an overdue expiry have already been applied? Derived from
+ * stored facts, so re-running the scheduler is harmless:
+ *  - ledger: the last `expire` entry is later than the anchor and no points
+ *    were credited after it (a refund from a reversal or a late welcome bonus
+ *    must still expire);
+ *  - level: a level override was set after the anchor;
+ *  - card: an expiry reset was recorded after the anchor.
  */
-function alreadyExpired(state: ClientState, anchor: Date): boolean {
+function expiryDone(state: ClientState, anchor: Date): { ledger: boolean; level: boolean; card: boolean } {
   const after = (d: Date) => d.getTime() > anchor.getTime();
-  return (
-    state.ledger.some((e) => e.type === 'expire' && after(e.createdAt)) ||
-    (state.levelOverride !== null && after(state.levelOverride.setAt)) ||
-    state.cardMoves.some((m) => m.reason === 'expiry_reset' && after(m.createdAt))
-  );
+  const lastExpire = lastExpiry(state);
+  const ledger =
+    lastExpire !== null &&
+    after(lastExpire.createdAt) &&
+    !state.ledger.some((e) => e.amount > 0 && e.createdAt.getTime() > lastExpire.createdAt.getTime());
+  const level = state.levelOverride !== null && after(state.levelOverride.setAt);
+  const card = state.cardMoves.some((m) => m.reason === 'expiry_reset' && after(m.createdAt));
+  return { ledger, level, card };
 }
 
 /**
  * Apply expiry if it is due at `now` (no warnings). Called by runExpiry and
- * at the start of purchase/redeem so a late scheduler cannot "save" points.
+ * at the start of purchase/redeem/manual adjustment so a late scheduler
+ * cannot "save" points.
  *
  * Due when `expiryDays` local calendar days have passed since the last
  * activity: last purchase on day D, expiry on day D + expiryDays.
@@ -26,19 +35,21 @@ function alreadyExpired(state: ClientState, anchor: Date): boolean {
 export function settleExpiry(rules: LoyaltyRules, state: ClientState, now: Date): Outcome {
   const out = emptyOutcome();
   const info = expiryInfo(rules, state, now);
-  if (info.daysLeft > 0 || alreadyExpired(state, info.anchor)) return out;
+  if (info.daysLeft > 0) return out;
+  const done = expiryDone(state, info.anchor);
 
   const mode = rules.expiry.onExpiry;
   const balance = balanceFromLedger(state.ledger);
   const level = deriveLevel(rules, state, now);
   const pos = cardPosition(rules, state);
-  const touchesLevel = mode !== 'balance_only' && level.index > 0;
-  const touchesCard = mode === 'reset_all' && (pos.filled > 0 || state.rewards.some((r) => r.status === 'available'));
-  if (balance <= 0 && !touchesLevel && !touchesCard) return out;
+  const burnsBalance = balance > 0 && !done.ledger;
+  const touchesLevel = mode !== 'balance_only' && level.index > 0 && !done.level;
+  const touchesCard = mode === 'reset_all' && !done.card && (pos.filled > 0 || state.rewards.some((r) => r.status === 'available'));
+  if (!burnsBalance && !touchesLevel && !touchesCard) return out;
 
   out.notificationKeys.push(`expired:${info.anchorKey}`);
 
-  if (balance > 0) {
+  if (burnsBalance) {
     out.ledger.push({
       clientId: state.clientId,
       type: 'expire',
@@ -55,12 +66,12 @@ export function settleExpiry(rules: LoyaltyRules, state: ClientState, now: Date)
     const tiers = rules.levels.tiers;
     const newIndex = mode === 'reset_all' ? 0 : level.index - 1;
     const to = tiers[newIndex]!;
-    out.levelOverride = { levelId: to.id, setAt: now };
+    out.levelOverride = { levelId: to.id, setAt: now, levelIndex: newIndex };
     out.levelChange = { from: level.tier.id, to: to.id };
     out.events.push({ type: 'level_down', clientId: state.clientId, from: level.tier.id, to: to.id, reason: 'expiry' });
-  } else if (mode === 'reset_all') {
+  } else if (mode === 'reset_all' && !done.level) {
     // Still restart the level metric so old purchases do not count again.
-    out.levelOverride = { levelId: rules.levels.tiers[0]!.id, setAt: now };
+    out.levelOverride = { levelId: rules.levels.tiers[0]!.id, setAt: now, levelIndex: 0 };
   }
 
   if (touchesCard) {

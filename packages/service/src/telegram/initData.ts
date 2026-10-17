@@ -120,8 +120,9 @@ export async function validateInitData(initData: string, botToken: string, opts:
     throw new InitDataError('MALFORMED', 'auth_date is missing or invalid');
   }
   const nowSec = Math.floor(opts.now.getTime() / 1000);
-  const maxAge = opts.maxAgeSeconds ?? 86_400;
-  const skew = opts.clockSkewSeconds ?? 60;
+  // A misconfigured limit (NaN / negative) must never disable the freshness check.
+  const maxAge = Number.isFinite(opts.maxAgeSeconds) && opts.maxAgeSeconds! >= 0 ? opts.maxAgeSeconds! : 86_400;
+  const skew = Number.isFinite(opts.clockSkewSeconds) && opts.clockSkewSeconds! >= 0 ? opts.clockSkewSeconds! : 60;
   if (authDateSec > nowSec + skew) throw new InitDataError('FUTURE_AUTH_DATE', 'auth_date is in the future');
   if (nowSec - authDateSec > maxAge) throw new InitDataError('EXPIRED', 'initData is too old, reopen the app');
 

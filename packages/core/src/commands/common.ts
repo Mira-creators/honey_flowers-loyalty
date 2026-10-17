@@ -8,15 +8,17 @@ export function assert(cond: unknown, code: ConstructorParameters<typeof Loyalty
   if (!cond) throw new LoyaltyError(code, message);
 }
 
-export function validateLines(lines: readonly PurchaseLine[]): Uzs {
+export function validateLines(rules: LoyaltyRules, lines: readonly PurchaseLine[]): Uzs {
   assert(Array.isArray(lines) && lines.length > 0, 'INVALID_INPUT', 'purchase must have at least one line');
   let total = 0;
   for (const l of lines) {
     assert((CATEGORIES as readonly string[]).includes(l.category), 'INVALID_INPUT', `unknown category: ${String(l.category)}`);
     assert(isUzs(l.amount), 'INVALID_INPUT', 'line amount must be a non-negative integer (UZS)');
     total += l.amount;
+    assert(Number.isSafeInteger(total), 'INVALID_INPUT', 'purchase amount is too large');
   }
   assert(total > 0, 'INVALID_INPUT', 'purchase amount must be positive');
+  assert(total <= rules.maxPurchaseAmount, 'INVALID_INPUT', `purchase amount exceeds the maximum of ${rules.maxPurchaseAmount}`);
   return total;
 }
 
@@ -53,7 +55,7 @@ export function rewardEffect(reward: Reward | null, lines: readonly PurchaseLine
   if (!reward) return { discount: 0, targetCategory: null };
   switch (reward.type) {
     case 'discount_pct':
-      return { discount: percentOf(amount, reward.value ?? 0), targetCategory: null };
+      return { discount: Math.min(amount, percentOf(amount, reward.value ?? 0)), targetCategory: null };
     case 'free_delivery':
     case 'free_card': {
       const cat: Category = reward.type === 'free_delivery' ? 'delivery' : 'cards';

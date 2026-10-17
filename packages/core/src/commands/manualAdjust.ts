@@ -1,8 +1,9 @@
-import { emptyOutcome, type Outcome } from '../outcome.js';
+import { applyOutcome, emptyOutcome, mergeOutcomes, type Outcome } from '../outcome.js';
 import type { LoyaltyRules } from '../rules.js';
 import { balanceFromLedger } from '../state.js';
 import type { ClientState } from '../types.js';
 import { assert } from './common.js';
+import { settleExpiry } from './expiry.js';
 
 export interface ManualAdjustInput {
   idempotencyKey: string;
@@ -16,13 +17,16 @@ export interface ManualAdjustInput {
  * Manager/owner correction of the points balance (e.g. migrating the old
  * client base). A positive adjustment also restarts the expiry timer.
  */
-export function manualAdjust(_rules: LoyaltyRules, state: ClientState, input: ManualAdjustInput, now: Date): Outcome {
+export function manualAdjust(rules: LoyaltyRules, state: ClientState, input: ManualAdjustInput, now: Date): Outcome {
   assert(Number.isSafeInteger(input.amount) && input.amount !== 0, 'INVALID_INPUT', 'amount must be a non-zero integer');
   assert(input.reason?.trim(), 'INVALID_INPUT', 'reason is required');
   if (state.ledger.some((e) => e.idempotencyKey === input.idempotencyKey)) return { ...emptyOutcome(), replayed: true };
+  // Overdue expiry is settled first: an adjustment cannot "save" burnt points.
+  const expiry = settleExpiry(rules, state, now);
+  const s = applyOutcome(state, expiry);
   const out = emptyOutcome();
   out.ledger.push({
-    clientId: state.clientId,
+    clientId: s.clientId,
     type: 'manual_adjust',
     amount: input.amount,
     purchaseId: null,
@@ -31,6 +35,6 @@ export function manualAdjust(_rules: LoyaltyRules, state: ClientState, input: Ma
     idempotencyKey: input.idempotencyKey,
     createdAt: now,
   });
-  if (balanceFromLedger(state.ledger) + input.amount < 0) out.warnings.push('balance becomes negative');
-  return out;
+  if (balanceFromLedger(s.ledger) + input.amount < 0) out.warnings.push('balance becomes negative');
+  return mergeOutcomes(expiry, out);
 }

@@ -10,7 +10,12 @@ import { CATEGORIES, REWARD_TYPES } from './types.js';
  */
 
 const uzs = z.number().int().nonnegative();
-const pct = z.number().min(0).max(100);
+/** Percent with at most 2 decimals (0.01% steps): anything finer would be rounded by the money math. */
+const pct = z
+  .number()
+  .min(0)
+  .max(100)
+  .refine((v) => Math.abs(v * 100 - Math.round(v * 100)) < 1e-9, { message: 'at most 2 decimals' });
 
 export const levelTierSchema = z.object({
   /** Stable id used in storage (level_override) and events. */
@@ -26,12 +31,23 @@ export const levelTierSchema = z.object({
   threshold: z.number().int().nonnegative(),
 });
 
-export const cellRewardSchema = z.object({
-  cell: z.number().int().positive(),
-  type: z.enum(REWARD_TYPES),
-  value: z.number().nonnegative().optional(),
-  title: z.string().min(1),
-});
+export const cellRewardSchema = z
+  .object({
+    cell: z.number().int().positive(),
+    type: z.enum(REWARD_TYPES),
+    /** discount_pct: percent (<= 100, 2 decimals); free_*: integer cap in UZS. */
+    value: z.number().nonnegative().optional(),
+    title: z.string().min(1),
+  })
+  .superRefine((r, ctx) => {
+    if (r.value === undefined) return;
+    if (r.type === 'discount_pct') {
+      if (r.value > 100) ctx.addIssue({ code: 'custom', path: ['value'], message: 'discount cannot exceed 100%' });
+      if (Math.abs(r.value * 100 - Math.round(r.value * 100)) > 1e-9) ctx.addIssue({ code: 'custom', path: ['value'], message: 'at most 2 decimals' });
+    } else if (!Number.isSafeInteger(r.value)) {
+      ctx.addIssue({ code: 'custom', path: ['value'], message: 'cap must be an integer amount in UZS' });
+    }
+  });
 
 export const loyaltyRulesSchema = z
   .object({
@@ -53,6 +69,8 @@ export const loyaltyRulesSchema = z
 
     /** Share of the order amount (percent) that may be paid with points. */
     maxRedeemPct: pct,
+    /** Largest purchase amount (UZS) the engine accepts; protects against typos. Defaults for rules stored before it existed. */
+    maxPurchaseAmount: uzs.positive().default(100_000_000),
     /** May a discount reward (discount_pct) be combined with points in one order? */
     allowDiscountWithPoints: z.boolean(),
     /** Points credited once at registration. 0 disables. */

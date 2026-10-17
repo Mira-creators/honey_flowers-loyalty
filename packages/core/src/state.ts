@@ -57,7 +57,9 @@ export function deriveLevel(rules: LoyaltyRules, state: ClientState, now: Date):
     if (metric >= t.threshold) index = i;
   });
   if (override) {
-    const oi = tiers.findIndex((t) => t.id === override.levelId);
+    // Match by id; if a rules edit renamed the tier, fall back to the stored index.
+    let oi = tiers.findIndex((t) => t.id === override.levelId);
+    if (oi < 0 && override.levelIndex !== undefined) oi = Math.min(override.levelIndex, tiers.length - 1);
     if (oi > index) index = oi;
   }
   const tier = tiers[index]!;
@@ -117,8 +119,9 @@ export function purchasesToNextReward(rules: LoyaltyRules, pos: CardPosition): n
 // ---------------------------------------------------------------- expiry
 
 /**
- * The moment the expiry timer counts from: the latest of registration,
- * the last active purchase and the last positive manual adjustment.
+ * The moment the expiry timer counts from: the latest of registration, the
+ * last active purchase, the welcome bonus and the last positive manual
+ * adjustment (i.e. any event that credited points or should keep them alive).
  */
 export function activityAnchor(state: ClientState): Date {
   let anchor = state.registeredAt;
@@ -126,8 +129,15 @@ export function activityAnchor(state: ClientState): Date {
     if (d.getTime() > anchor.getTime()) anchor = d;
   };
   for (const p of activePurchases(state)) later(p.createdAt);
-  for (const e of state.ledger) if (e.type === 'manual_adjust' && e.amount > 0) later(e.createdAt);
+  for (const e of state.ledger) if ((e.type === 'manual_adjust' || e.type === 'welcome') && e.amount > 0) later(e.createdAt);
   return anchor;
+}
+
+/** Latest `expire` ledger entry, or null. */
+export function lastExpiry(state: ClientState): LedgerEntry | null {
+  let last: LedgerEntry | null = null;
+  for (const e of state.ledger) if (e.type === 'expire' && (!last || e.createdAt.getTime() >= last.createdAt.getTime())) last = e;
+  return last;
 }
 
 export interface ExpiryInfo {

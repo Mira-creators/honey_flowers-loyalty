@@ -36,11 +36,18 @@ export function redeem(rules: LoyaltyRules, state: ClientState, input: RedeemInp
   assert(Number.isSafeInteger(points) && points >= 0, 'INVALID_INPUT', 'points must be a non-negative integer');
   assert(points > 0 || input.rewardId, 'INVALID_INPUT', 'nothing to redeem');
 
-  // Idempotency: the key is stored on the ledger entry / used reward.
-  const keyUsed =
-    state.ledger.some((e) => e.idempotencyKey === input.idempotencyKey) ||
-    state.rewards.some((r) => r.usedIdempotencyKey === input.idempotencyKey);
-  if (keyUsed) return { ...emptyOutcome(), replayed: true };
+  // Idempotency: the key is stored on the ledger entry / used reward. A replay
+  // must carry the same payload; the same key with other values is a conflict.
+  const priorEntry = state.ledger.find((e) => e.idempotencyKey === input.idempotencyKey);
+  const priorReward = state.rewards.find((r) => r.usedIdempotencyKey === input.idempotencyKey);
+  if (priorEntry || priorReward) {
+    const samePoints = (priorEntry ? -priorEntry.amount : 0) === points;
+    const sameReward = (priorReward?.id ?? null) === (input.rewardId ?? null);
+    if (!samePoints || !sameReward) {
+      throw new LoyaltyError('IDEMPOTENCY_CONFLICT', 'idempotencyKey was already used for a different redemption');
+    }
+    return { ...emptyOutcome(), replayed: true };
+  }
 
   const expiry = settleExpiry(rules, state, now);
   const s = applyOutcome(state, expiry);

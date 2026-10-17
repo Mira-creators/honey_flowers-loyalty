@@ -106,6 +106,8 @@ export interface CardMove {
 export interface LevelOverride {
   levelId: string;
   setAt: Date;
+  /** Tier index at the time the override was set; used if the id is renamed by a rules edit. */
+  levelIndex?: number;
 }
 
 export type PurchaseStatus = 'active' | 'reversed';

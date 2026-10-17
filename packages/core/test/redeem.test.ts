@@ -32,7 +32,7 @@ describe('redemption of мёд', () => {
   it('cap floors odd amounts (50% of 99 999 = 49 999)', () => {
     const sim = new Sim();
     sim.seedPoints(100_000, d0);
-    expect(maxRedeemable(sim.rules, sim.state, flowers(99_999))).toBe(49_999);
+    expect(maxRedeemable(sim.rules, sim.state, flowers(99_999), null, d1)).toBe(49_999);
   });
 
   it('maxRedeemPct 100 lets the client pay the whole order with points', () => {
@@ -57,7 +57,7 @@ describe('redemption of мёд', () => {
     expect(code(() => sim.buy(300_000, plusDays(d0, 10), { useRewardId: gift.id, redeemPoints: 1_000 }))).toBe(
       'DISCOUNT_WITH_POINTS_NOT_ALLOWED',
     );
-    expect(maxRedeemable(sim.rules, sim.state, flowers(300_000), gift.id)).toBe(0);
+    expect(maxRedeemable(sim.rules, sim.state, flowers(300_000), gift.id, plusDays(d0, 10))).toBe(0);
   });
 
   it('allowDiscountWithPoints=true: discount first, points capped, cashback on what is left', () => {
