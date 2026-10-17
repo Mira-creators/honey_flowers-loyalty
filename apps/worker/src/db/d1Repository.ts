@@ -14,6 +14,7 @@ import {
   ConcurrencyError,
   nationalPart,
   phoneDigits,
+  PhoneTakenError,
   type ClientProfile,
   type NewClient,
   type Repository,
@@ -47,6 +48,15 @@ export interface TgUser {
   firstName: string | null;
   username: string | null;
   language: string;
+}
+
+export interface NotificationLogEntry {
+  clientId: string | null;
+  telegramId: number | null;
+  types: string;
+  text: string;
+  status: 'sent' | 'failed' | 'skipped';
+  error?: string | null;
 }
 
 export interface ClientContact {
@@ -201,9 +211,20 @@ export class D1Repository implements Repository {
     await this.setSettingStmt(key, value).run();
   }
 
+  /** TEST_MODE time travel, whole days, clamped to [0, MAX_CLOCK_OFFSET_DAYS] so "now" is always a valid Date. */
+  static readonly MAX_CLOCK_OFFSET_DAYS = 3650;
+
   async getClockOffsetDays(): Promise<number> {
-    const v = Number(await this.getSetting('clock_offset_days'));
-    return Number.isFinite(v) ? v : 0;
+    const v = Math.trunc(Number(await this.getSetting('clock_offset_days')));
+    return Number.isFinite(v) ? Math.min(Math.max(v, 0), D1Repository.MAX_CLOCK_OFFSET_DAYS) : 0;
+  }
+
+  /** TEST_MODE: set the clock offset; every client goes back to the daily job's queue. */
+  async setClockOffsetDays(days: number): Promise<void> {
+    await this.db.batch([
+      this.setSettingStmt('clock_offset_days', String(days)),
+      this.db.prepare('UPDATE clients SET next_check_on = NULL WHERE next_check_on IS NOT NULL'),
+    ]);
   }
 
   // ---------------------------------------------------------------- rules
@@ -258,6 +279,8 @@ export class D1Repository implements Repository {
           .prepare('INSERT INTO rules_versions (id, rules, active_from, created_by, created_at) VALUES (?, ?, ?, ?, ?)')
           .bind(rules.version, JSON.stringify(rules), iso(now), createdBy, iso(new Date())),
         this.setSettingStmt('rules_version', String(rules.version)),
+        // Expiry days / warning days may have changed: every client is re-checked by the next daily run.
+        this.db.prepare('UPDATE clients SET next_check_on = NULL WHERE next_check_on IS NOT NULL'),
       ]);
     } catch (e) {
       if (isUniqueViolation(e, 'rules_versions')) throw new ConcurrencyError('rules were changed concurrently');
@@ -268,6 +291,13 @@ export class D1Repository implements Repository {
 
   // ---------------------------------------------------------------- telegram users
 
+  /**
+   * Remember who opened the bot / the app. Called on EVERY API request (the
+   * client app polls every few seconds), so the row is rewritten at most once
+   * per TOUCH_INTERVAL_MS unless the name changed (D1 counts rows written).
+   */
+  static readonly TOUCH_INTERVAL_MS = 10 * 60_000;
+
   async touchTgUser(u: { telegramId: number; firstName: string | null; username?: string | null; language?: string | null }, now: Date): Promise<void> {
     const lang = u.language === 'uz' ? 'uz' : 'ru';
     await this.db
@@ -277,9 +307,12 @@ export class D1Repository implements Repository {
          ON CONFLICT(telegram_id) DO UPDATE SET
            first_name = COALESCE(excluded.first_name, tg_users.first_name),
            username = COALESCE(excluded.username, tg_users.username),
-           last_seen_at = excluded.last_seen_at`,
+           last_seen_at = excluded.last_seen_at
+         WHERE tg_users.last_seen_at < ?
+            OR (excluded.first_name IS NOT NULL AND excluded.first_name IS NOT tg_users.first_name)
+            OR (excluded.username IS NOT NULL AND excluded.username IS NOT tg_users.username)`,
       )
-      .bind(u.telegramId, u.firstName, u.username ?? null, lang, iso(now), iso(now))
+      .bind(u.telegramId, u.firstName, u.username ?? null, lang, iso(now), iso(now), iso(new Date(now.getTime() - D1Repository.TOUCH_INTERVAL_MS)))
       .run();
   }
 
@@ -360,6 +393,8 @@ export class D1Repository implements Repository {
       } catch (e) {
         if (isUniqueViolation(e, 'clients.code')) continue;
         if (isUniqueViolation(e, 'clients.telegram_id')) throw new Error('telegram_id already registered');
+        // Two accounts sharing the same phone at the same moment: the second one loses cleanly.
+        if (isUniqueViolation(e, 'clients.phone')) throw new PhoneTakenError('phone already belongs to another client');
         throw e;
       }
     }
@@ -382,7 +417,12 @@ export class D1Repository implements Repository {
     if (patch.consentAt !== undefined) add('consent_at', isoOrNull(patch.consentAt));
     if (patch.birthday !== undefined) add('birthday', patch.birthday);
     if (sets.length) {
-      await this.db.prepare(`UPDATE clients SET ${sets.join(', ')} WHERE id = ?`).bind(...vals, id).run();
+      try {
+        await this.db.prepare(`UPDATE clients SET ${sets.join(', ')} WHERE id = ?`).bind(...vals, id).run();
+      } catch (e) {
+        if (isUniqueViolation(e, 'clients.phone')) throw new PhoneTakenError('phone already belongs to another client');
+        throw e;
+      }
     }
     const c = await this.findClientById(id);
     if (!c) throw new Error(`client ${id} not found`);
@@ -433,12 +473,32 @@ export class D1Repository implements Repository {
     return results.map(staffFromRow);
   }
 
-  /** Staff added by phone gets its telegram_id when that person shares the phone with the bot. */
+  /**
+   * Staff added by phone gets its telegram_id when that person shares the phone
+   * with the bot. If that Telegram account already has its own staff row, the
+   * two rows are merged into it (role and activity of the phone row win — it is
+   * the owner's latest decision) and the phone-only row is removed, so no
+   * unreachable "orphan" staff row stays behind.
+   */
   async linkStaffByPhone(phone: string, telegramId: number): Promise<void> {
-    await this.db
-      .prepare('UPDATE staff SET telegram_id = ? WHERE phone = ? AND telegram_id IS NULL AND NOT EXISTS (SELECT 1 FROM staff WHERE telegram_id = ?)')
-      .bind(telegramId, phone, telegramId)
-      .run();
+    const byPhone = await this.db.prepare('SELECT * FROM staff WHERE phone = ? AND telegram_id IS NULL').bind(phone).first<Row>();
+    if (!byPhone) return;
+    const byTg = await this.db.prepare('SELECT * FROM staff WHERE telegram_id = ?').bind(telegramId).first<Row>();
+    if (!byTg) {
+      await this.db.prepare('UPDATE staff SET telegram_id = ? WHERE id = ?').bind(telegramId, String(byPhone.id)).run();
+      return;
+    }
+    await this.db.batch([
+      this.db.prepare('DELETE FROM staff WHERE id = ?').bind(String(byPhone.id)),
+      this.db
+        .prepare('UPDATE staff SET role = ?, active = ?, phone = COALESCE(phone, ?), name = COALESCE(name, ?) WHERE id = ?')
+        .bind(String(byPhone.role), num(byPhone.active), phone, String(byPhone.name), String(byTg.id)),
+    ]);
+  }
+
+  async findStaffByPhone(phone: string): Promise<StaffMember | null> {
+    const r = await this.db.prepare('SELECT * FROM staff WHERE phone = ?').bind(phone).first<Row>();
+    return r ? staffFromRow(r) : null;
   }
 
   async upsertStaff(input: { telegramId: number | null; phone: string | null; name: string; role: StaffRole }, now: Date): Promise<StaffMember> {
@@ -541,18 +601,46 @@ export class D1Repository implements Repository {
     return { state, version: num(ver!.results[0]?.v ?? 0) };
   }
 
-  /** Bulk load for the daily job. */
-  async loadAllClientStates(): Promise<Map<string, VersionedState>> {
-    const [clients, versions, purchases, ledger, moves, rewards, keys] = await this.db.batch<Row>([
-      this.db.prepare('SELECT id, created_at, level_override, level_override_at, level_override_index FROM clients ORDER BY created_at'),
-      this.db.prepare('SELECT client_id, MAX(version) AS v FROM client_versions GROUP BY client_id'),
-      this.db.prepare('SELECT * FROM purchases ORDER BY created_at, rowid'),
-      this.db.prepare('SELECT * FROM points_ledger ORDER BY rowid'),
-      this.db.prepare('SELECT * FROM card_moves ORDER BY id'),
-      this.db.prepare('SELECT * FROM rewards ORDER BY rowid'),
-      this.db.prepare('SELECT client_id, key FROM notification_keys ORDER BY rowid'),
-    ]);
+  /**
+   * Daily job: clients due on `today` (clients.next_check_on IS NULL or <= today),
+   * oldest first, at most `limit`. See migrations/0003 and lib/expirySchedule.ts.
+   */
+  async expiryCandidates(today: string, limit: number): Promise<string[]> {
+    // Two index ranges (IS NULL, <= today) instead of an OR, so SQLite never scans the table.
+    const { results } = await this.db
+      .prepare(
+        `SELECT id FROM (
+           SELECT id, next_check_on, created_at FROM clients WHERE next_check_on IS NULL
+           UNION ALL
+           SELECT id, next_check_on, created_at FROM clients WHERE next_check_on <= ?
+         ) ORDER BY next_check_on, created_at LIMIT ?`,
+      )
+      .bind(today, limit)
+      .all<{ id: string }>();
+    return results.map((r) => r.id);
+  }
+
+  /** Daily job: remember when each client must be looked at next (one batch). */
+  async setNextChecks(items: Array<{ clientId: string; on: string }>): Promise<void> {
+    if (!items.length) return;
+    await this.db.batch(items.map((i) => this.db.prepare('UPDATE clients SET next_check_on = ? WHERE id = ?').bind(i.on, i.clientId)));
+  }
+
+  /** Bulk load of several clients' states in one round trip (daily job; <= 90 ids per call). */
+  async loadClientStates(ids: string[]): Promise<Map<string, VersionedState>> {
     const out = new Map<string, VersionedState>();
+    if (!ids.length) return out;
+    if (ids.length > 90) throw new Error('loadClientStates: at most 90 ids per call (D1 bound parameter limit)');
+    const ph = ids.map(() => '?').join(',');
+    const [clients, versions, purchases, ledger, moves, rewards, keys] = await this.db.batch<Row>([
+      this.db.prepare(`SELECT id, created_at, level_override, level_override_at, level_override_index FROM clients WHERE id IN (${ph})`).bind(...ids),
+      this.db.prepare(`SELECT client_id, MAX(version) AS v FROM client_versions WHERE client_id IN (${ph}) GROUP BY client_id`).bind(...ids),
+      this.db.prepare(`SELECT * FROM purchases WHERE client_id IN (${ph}) ORDER BY created_at, rowid`).bind(...ids),
+      this.db.prepare(`SELECT * FROM points_ledger WHERE client_id IN (${ph}) ORDER BY rowid`).bind(...ids),
+      this.db.prepare(`SELECT * FROM card_moves WHERE client_id IN (${ph}) ORDER BY id`).bind(...ids),
+      this.db.prepare(`SELECT * FROM rewards WHERE client_id IN (${ph}) ORDER BY rowid`).bind(...ids),
+      this.db.prepare(`SELECT client_id, key FROM notification_keys WHERE client_id IN (${ph}) ORDER BY rowid`).bind(...ids),
+    ]);
     for (const c of clients!.results) {
       const id = String(c.id);
       out.set(id, {
@@ -695,6 +783,11 @@ export class D1Repository implements Repository {
     for (const k of o.notificationKeys) {
       stmts.push(db.prepare('INSERT OR IGNORE INTO notification_keys (client_id, key, created_at) VALUES (?, ?, ?)').bind(clientId, k, keyAt));
     }
+    // Any change of the facts that drive expiry (purchase, credit, refund, reset) sends the
+    // client back to the daily job's queue; the job then stores the next relevant date.
+    if (o.purchase || o.ledger.length || o.cardMoves.length || o.levelOverride !== undefined) {
+      stmts.push(db.prepare('UPDATE clients SET next_check_on = NULL WHERE id = ?').bind(clientId));
+    }
     try {
       await db.batch(stmts);
     } catch (e) {
@@ -723,7 +816,11 @@ export class D1Repository implements Repository {
 
   // ---------------------------------------------------------------- reports
 
-  /** Operations of all clients, newest first (staff "recent" list, owner journal). */
+  /**
+   * Operations of all clients, newest first (staff "recent" list, owner journal).
+   * Each source takes only its newest `limit` rows through an index (migrations
+   * 0001/0003), so the cost is O(limit), not O(all purchases).
+   */
   async operations(limit: number): Promise<Row[]> {
     const { results } = await this.db
       .prepare(
@@ -731,27 +828,32 @@ export class D1Repository implements Repository {
            SELECT p.id AS id, p.created_at AS at, 'purchase' AS kind,
              (SELECT COALESCE(SUM(l.amount), 0) FROM points_ledger l WHERE l.purchase_id = p.id AND l.type IN ('accrual', 'redeem')) AS points,
              p.client_id AS client_id, c.name AS client_name, p.staff_id AS staff_id, p.id AS purchase_id, p.amount AS purchase_amount, p.status AS status
-           FROM purchases p JOIN clients c ON c.id = p.client_id
+           FROM (SELECT * FROM purchases ORDER BY created_at DESC LIMIT ?1) p JOIN clients c ON c.id = p.client_id
            UNION ALL
            SELECT 'rev-' || p.id, p.reversed_at, 'reversal',
              (SELECT COALESCE(SUM(l.amount), 0) FROM points_ledger l WHERE l.purchase_id = p.id AND l.type = 'reversal'),
              p.client_id, c.name, p.reversed_by, p.id, p.amount, p.status
-           FROM purchases p JOIN clients c ON c.id = p.client_id WHERE p.status = 'reversed'
+           FROM (SELECT * FROM purchases WHERE status = 'reversed' ORDER BY reversed_at DESC LIMIT ?1) p JOIN clients c ON c.id = p.client_id
            UNION ALL
            SELECT l.id, l.created_at,
              CASE l.type WHEN 'welcome' THEN 'welcome' WHEN 'redeem' THEN 'redeem' WHEN 'expire' THEN 'expire' ELSE 'manual' END,
              l.amount, l.client_id, c.name, l.staff_id, NULL, NULL, NULL
-           FROM points_ledger l JOIN clients c ON c.id = l.client_id WHERE l.purchase_id IS NULL
+           FROM (SELECT * FROM points_ledger WHERE purchase_id IS NULL ORDER BY created_at DESC LIMIT ?1) l JOIN clients c ON c.id = l.client_id
            UNION ALL
            SELECT 'gift-' || r.id, r.used_at, 'gift_used', 0, r.client_id, c.name, NULL, NULL, NULL, NULL
-           FROM rewards r JOIN clients c ON c.id = r.client_id WHERE r.status = 'used' AND r.used_in_purchase IS NULL
-         ) ORDER BY at DESC LIMIT ?`,
+           FROM (SELECT * FROM rewards WHERE status = 'used' AND used_in_purchase IS NULL ORDER BY used_at DESC LIMIT ?1) r JOIN clients c ON c.id = r.client_id
+         ) ORDER BY at DESC LIMIT ?1`,
       )
       .bind(limit)
       .all<Row>();
     return results;
   }
 
+  /**
+   * Owner statistics. Aggregates run in SQL (the weekly histogram is grouped by
+   * the Monday of the Tashkent-local week, UTC+5 without DST), so the Worker
+   * never materialises purchase rows.
+   */
   async statsRows(nowIso: string, since7d: string, since90d: string, since8w: string) {
     const [counts, points, gifts, repeat, weekly] = await this.db.batch<Row>([
       this.db
@@ -785,8 +887,13 @@ export class D1Repository implements Repository {
              WHERE status = 'active' AND created_at >= ? AND created_at <= ? GROUP BY client_id)`,
         )
         .bind(since90d, nowIso),
+      // Monday of the local week: shift to Tashkent (+5h), go back 6 days, then forward to the next Monday.
       this.db
-        .prepare(`SELECT created_at FROM purchases WHERE status = 'active' AND created_at >= ? AND created_at <= ?`)
+        .prepare(
+          `SELECT date(created_at, '+5 hours', '-6 days', 'weekday 1') AS week_start, COUNT(*) AS n
+           FROM purchases WHERE status = 'active' AND created_at >= ? AND created_at <= ?
+           GROUP BY week_start`,
+        )
         .bind(since8w, nowIso),
     ]);
     return {
@@ -794,20 +901,30 @@ export class D1Repository implements Repository {
       points: points!.results[0]!,
       gifts: gifts!.results[0]!,
       repeat: repeat!.results[0]!,
-      weekly: weekly!.results.map((r) => String(r.created_at)),
+      weekly: weekly!.results.map((r) => ({ weekStart: String(r.week_start), purchases: num(r.n) })),
     };
   }
 
-  /** Persist a bot message attempt. Never throws. */
-  async logNotification(entry: { clientId: string | null; telegramId: number | null; types: string; text: string; status: 'sent' | 'failed' | 'skipped'; error?: string | null }): Promise<void> {
+  /** Persist bot message attempts, one batch. Never throws. */
+  async logNotifications(entries: NotificationLogEntry[]): Promise<void> {
+    if (!entries.length) return;
     try {
-      await this.db
-        .prepare('INSERT INTO notifications_log (client_id, telegram_id, types, text, status, error, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-        .bind(entry.clientId, entry.telegramId, entry.types, entry.text, entry.status, entry.error ?? null, iso(new Date()))
-        .run();
+      const at = iso(new Date());
+      await this.db.batch(
+        entries.map((entry) =>
+          this.db
+            .prepare('INSERT INTO notifications_log (client_id, telegram_id, types, text, status, error, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+            .bind(entry.clientId, entry.telegramId, entry.types, entry.text, entry.status, entry.error ?? null, at),
+        ),
+      );
     } catch (e) {
       console.error('notifications_log insert failed', e);
     }
+  }
+
+  /** Persist one bot message attempt. Never throws. */
+  async logNotification(entry: NotificationLogEntry): Promise<void> {
+    await this.logNotifications([entry]);
   }
 
   /** Tests / TEST_MODE: wipe all data (keeps the schema and rules version 1). */

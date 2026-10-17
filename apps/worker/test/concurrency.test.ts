@@ -3,10 +3,10 @@ import { applyPurchase, balanceFromLedger, emptyOutcome, registerClient } from '
 import { ConcurrencyError, LoyaltyService, NullNotifier } from '@honey/service';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { D1Repository } from '../src/db/d1Repository.js';
-import { buy, call, json, key, makeStaff, mockTelegram, register, repo, resetDb, testEnv } from './helpers.js';
+import { buy, call, json, key, makeStaff, mockTelegram, register, repo, resetDb, T, testEnv } from './helpers.js';
 
-const FLORIST = 1001;
-const CLIENT = 5001;
+const FLORIST = T + 1001;
+const CLIENT = T + 5001;
 
 let tg: ReturnType<typeof mockTelegram>;
 beforeEach(async () => {

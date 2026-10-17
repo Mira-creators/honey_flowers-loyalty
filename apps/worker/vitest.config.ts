@@ -19,6 +19,7 @@ export default defineConfig(async () => {
             BOT_TOKEN: '7000000001:AAH-test-token-for-worker-tests',
             WEBHOOK_SECRET: 'test-webhook-secret',
             SETUP_KEY: 'test-setup-key',
+            TEST_KEY: 'test-test-key',
             PUBLIC_URL: 'https://honey.example.workers.dev',
           },
         },

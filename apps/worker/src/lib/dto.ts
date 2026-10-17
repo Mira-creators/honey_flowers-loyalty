@@ -13,8 +13,10 @@ import {
   applyOutcome,
   balanceFromLedger,
   cardPosition,
+  dayNumberFromKey,
   deriveLevel,
   expiryInfo,
+  keyFromDayNumber,
   rewardsForCycle,
   settleExpiry,
   type ClientState,
@@ -81,6 +83,7 @@ export function history(state: ClientState, actorNames: Map<string, string>, lim
       at: p.createdAt.toISOString(),
       kind: 'purchase',
       points: sumBy(entries.filter((e) => e.type === 'accrual' || e.type === 'redeem'), (e) => e.amount),
+      cashback: sumBy(entries.filter((e) => e.type === 'accrual'), (e) => e.amount),
       purchaseId: p.id,
       purchaseAmount: p.amount,
       pct: res?.cashbackPct ?? 0,
@@ -164,6 +167,8 @@ export function clientSummary(
     level: levelInfo(level.tier),
     next,
     card: cardDTO(rules, state),
+    // exp.expiresOn is the day the points burn (engine); the client is told the last valid day.
+    expiresOn: balance > 0 ? keyFromDayNumber(dayNumberFromKey(exp.expiresOn) - 1) : null,
     expiresAt: balance > 0 ? tashkentDayStartIso(exp.expiresOn) : null,
     gifts: [...state.rewards]
       .sort((a, b) => b.unlockedAt.getTime() - a.unlockedAt.getTime())

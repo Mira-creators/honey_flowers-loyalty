@@ -5,16 +5,26 @@ import type {
 } from '@honey/contracts';
 import { tg } from './tg';
 
-/** Browser testing outside Telegram (server must run with TEST_MODE=1). */
+/**
+ * Browser testing outside Telegram (server must run with TEST_MODE=1). The server accepts
+ * X-Test-User only with X-Test-Key equal to its TEST_KEY secret and ids >= 900 000 000.
+ */
 const TEST_KEY = 'honey.testUser';
-export function getTestUser(): { id: string; name: string } | null {
+export function getTestUser(): { id: string; name: string; key: string } | null {
   const q = new URLSearchParams(location.search);
   const qid = q.get('testUser');
-  if (qid) { const u = { id: qid, name: q.get('testName') || 'Тестер ' + qid.slice(-3) }; try { localStorage.setItem(TEST_KEY, JSON.stringify(u)); } catch { /* ignore */ } return u; }
-  try { const s = localStorage.getItem(TEST_KEY); return s ? JSON.parse(s) : null; } catch { return null; }
+  if (qid) {
+    const u = { id: qid, name: q.get('testName') || 'Тестер ' + qid.slice(-3), key: q.get('testKey') || getTestUser0()?.key || '' };
+    try { localStorage.setItem(TEST_KEY, JSON.stringify(u)); } catch { /* ignore */ }
+    return u;
+  }
+  return getTestUser0();
 }
-export function setTestUser(name: string) {
-  const u = { id: String(900000000 + Math.floor(Math.random() * 99999999)), name };
+function getTestUser0(): { id: string; name: string; key: string } | null {
+  try { const s = localStorage.getItem(TEST_KEY); return s ? { key: '', ...JSON.parse(s) } : null; } catch { return null; }
+}
+export function setTestUser(name: string, key: string) {
+  const u = { id: String(900000000 + Math.floor(Math.random() * 99999999)), name, key };
   try { localStorage.setItem(TEST_KEY, JSON.stringify(u)); } catch { /* ignore */ }
   return u;
 }
@@ -30,7 +40,7 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
   if (tg.inTelegram) headers.Authorization = 'tma ' + tg.initData();
   else {
     const tu = getTestUser();
-    if (tu) { headers['X-Test-User'] = tu.id; headers['X-Test-Name'] = encodeURIComponent(tu.name); }
+    if (tu) { headers['X-Test-User'] = tu.id; headers['X-Test-Name'] = encodeURIComponent(tu.name); headers['X-Test-Key'] = tu.key; }
   }
   let res: Response;
   try {

@@ -4,6 +4,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import type { Vars } from '../auth.js';
 import { runDailyJob } from '../cron.js';
+import { D1Repository } from '../db/d1Repository.js';
 import { HttpError } from '../lib/errors.js';
 import { buildMe } from '../lib/summary.js';
 
@@ -28,7 +29,10 @@ testRoutes.post('/clock', async (c) => {
     .parse(await c.req.json());
   const offset = body.reset ? 0 : app.clockOffsetDays + body.days!;
   if (offset < 0) throw new HttpError(400, 'validation', 'Нельзя уйти в прошлое раньше реального времени');
-  await app.repo.setSetting('clock_offset_days', String(offset));
+  if (offset > D1Repository.MAX_CLOCK_OFFSET_DAYS) {
+    throw new HttpError(400, 'validation', `Тестовое время можно сдвинуть не больше чем на ${D1Repository.MAX_CLOCK_OFFSET_DAYS} дней`);
+  }
+  await app.repo.setClockOffsetDays(offset);
   // Rebuild the context so "now" in the response reflects the new offset.
   const fresh = await c.get('rebuild')();
   return c.json(await buildMe(fresh, c.get('caller')));
@@ -37,7 +41,7 @@ testRoutes.post('/clock', async (c) => {
 /** POST /api/test/run-expiry — runs the daily job now. */
 testRoutes.post('/run-expiry', async (c) => {
   const res = await runDailyJob(c.get('app'));
-  return c.json({ expired: res.expired, warned: res.warned } satisfies TestRunExpiryDTO);
+  return c.json({ expired: res.expired, warned: res.warned, checked: res.checked, more: res.more } satisfies TestRunExpiryDTO);
 });
 
 /** POST /api/test/reset-me — delete the caller's client data (replay onboarding). → MeDTO */
@@ -56,8 +60,13 @@ testRoutes.post('/register', async (c) => {
   const body = z.object({ phone: z.string().min(4).max(30), name: z.string().trim().min(1).max(60) }).parse(await c.req.json());
   const phone = normalizePhone(body.phone);
   if (!phone) throw new HttpError(400, 'validation', 'Не похоже на номер телефона');
+  // A browser tester (X-Test-User) proves nothing about the phone: it must not take over a
+  // staff member's number, and never links a staff row. Real Telegram users (initData) may.
+  if (caller.via === 'testHeader' && (await app.repo.findStaffByPhone(phone))) {
+    throw new HttpError(403, 'forbidden', 'Этот номер принадлежит сотруднику: зарегистрируйтесь через Telegram');
+  }
   const user = await app.repo.getTgUser(caller.telegramId);
   await app.service.registerWithPhone({ telegramId: caller.telegramId, name: body.name, phone, language: user?.language ?? 'ru' });
-  await app.repo.linkStaffByPhone(phone, caller.telegramId);
+  if (caller.via === 'initData') await app.repo.linkStaffByPhone(phone, caller.telegramId);
   return c.json(await buildMe(app, caller), 201);
 });

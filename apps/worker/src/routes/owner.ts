@@ -37,10 +37,7 @@ ownerRoutes.get('/stats', async (c) => {
   const iso = (ms: number) => new Date(ms).toISOString();
   const r = await app.repo.statsRows(now.toISOString(), iso(now.getTime() - 7 * DAY_MS), iso(now.getTime() - 90 * DAY_MS), since8w);
   const perWeek = new Map(weeks.map((w) => [w, 0]));
-  for (const at of r.weekly) {
-    const w = weekStartKey(new Date(at));
-    if (perWeek.has(w)) perWeek.set(w, perWeek.get(w)! + 1);
-  }
+  for (const w of r.weekly) if (perWeek.has(w.weekStart)) perWeek.set(w.weekStart, w.purchases);
   const buyers = Number(r.repeat.buyers ?? 0);
   const body: OwnerStatsDTO = {
     clients: Number(r.counts.clients),
@@ -95,12 +92,29 @@ const addStaffSchema = z.object({
   name: z.string().trim().max(60).optional(),
 });
 
+/**
+ * Phone or Telegram id? "id:123456789" / "tg:123456789" is always a Telegram id. A phone
+ * is "+…", "998XXXXXXXXX" or contains spaces / dashes / parentheses; any other bare
+ * number is a Telegram id — except a bare 9-digit number, which is ambiguous
+ * (national phone "901234567" vs a 9-digit Telegram id) and is refused.
+ */
+export function classifyPhoneOrId(s: string): { kind: 'phone' | 'id' | 'ambiguous'; value: string } {
+  const m = /^(?:id|tg):\s*(\d+)$/i.exec(s);
+  if (m) return { kind: 'id', value: m[1]! };
+  const digits = s.replace(/\D/g, '');
+  if (s.startsWith('+') || /[\s()-]/.test(s) || /^998\d{9}$/.test(digits)) return { kind: 'phone', value: s };
+  if (/^\d{9}$/.test(s)) return { kind: 'ambiguous', value: s };
+  return { kind: 'id', value: s };
+}
+
+export const AMBIGUOUS_MSG = 'Непонятно, телефон это или Telegram ID: телефон укажите с кодом страны (+998 90 123 45 67), Telegram ID — как id:123456789';
+
 async function resolveStaffTarget(app: AppContext, raw: string | number) {
   const s = String(raw).trim();
-  const digits = s.replace(/\D/g, '');
-  // A phone looks like +998…, 9 digits national or 12 digits with 998. Plain numbers otherwise = telegram id.
-  const looksLikePhone = s.startsWith('+') || /^998\d{9}$/.test(digits) || /^\d{9}$/.test(digits) || /[\s()-]/.test(s);
-  if (looksLikePhone) {
+  const { kind, value } = classifyPhoneOrId(s);
+  if (kind === 'ambiguous') throw new HttpError(400, 'validation', AMBIGUOUS_MSG);
+  const digits = value.replace(/\D/g, '');
+  if (kind === 'phone') {
     const phone = normalizePhone(s);
     if (!phone) throw new HttpError(400, 'validation', 'Не похоже на номер телефона');
     const client = await app.repo.findClientByPhone(phone);
@@ -119,6 +133,13 @@ ownerRoutes.post('/staff', async (c) => {
   const body = addStaffSchema.parse(await c.req.json());
   const target = await resolveStaffTarget(app, body.phoneOrTelegramId);
   const name = body.name || target.name || (target.phone ? `Сотрудник ${target.phone.slice(-4)}` : `Сотрудник ${target.telegramId}`);
+  // Changing the role of the last active owner to something else would lock everyone out of the owner screens.
+  if (body.role !== 'owner') {
+    const existing = target.telegramId !== null ? await app.repo.findStaffByTelegramId(target.telegramId) : target.phone ? await app.repo.findStaffByPhone(target.phone) : null;
+    if (existing?.active && existing.role === 'owner' && (await app.repo.countActiveOwners()) <= 1) {
+      throw new HttpError(409, 'conflict', 'Нельзя понизить последнего владельца: сначала назначьте другого владельца');
+    }
+  }
   const member = await app.repo.upsertStaff({ telegramId: target.telegramId, phone: target.phone, name, role: body.role }, app.now());
   return c.json(staffDTO(member), 201);
 });

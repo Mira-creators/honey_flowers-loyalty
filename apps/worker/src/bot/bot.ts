@@ -9,6 +9,8 @@ import { asLang, t, type BotLang } from './texts.js';
 /**
  * Telegram bot (grammY) behind POST /telegram/webhook.
  *
+ * Private chats only (group / channel updates are ignored).
+ *
  *   /start   greeting (ru + uz line); not registered → "📱 Поделиться номером" (request_contact)
  *            + inline web_app button "🐝 Открыть медовую карту"
  *   contact  only the sender's own contact: normalize phone, create client / attach phone,
@@ -58,7 +60,12 @@ export function createBot(app: AppContext, botInfo: UserFromGetMe): Bot {
     }
   });
 
-  bot.command('start', async (ctx) => {
+  // The loyalty card is personal: the bot talks only in private chats. Updates from
+  // groups, supergroups and channels are acknowledged (200) and otherwise ignored, so a
+  // member's card code never lands in a group.
+  const pm = bot.chatType('private');
+
+  pm.command('start', async (ctx) => {
     const lang = await langOf(app, ctx);
     const T = t(lang);
     const name = ctx.from?.first_name || '👋';
@@ -74,17 +81,17 @@ export function createBot(app: AppContext, botInfo: UserFromGetMe): Bot {
     await sendCardButton(app, ctx, lang);
   });
 
-  bot.command('card', async (ctx) => {
+  pm.command('card', async (ctx) => {
     await sendCardButton(app, ctx, await langOf(app, ctx));
   });
 
-  bot.command('lang', async (ctx) => {
+  pm.command('lang', async (ctx) => {
     await ctx.reply(t('ru').langPrompt, {
       reply_markup: new InlineKeyboard().text('🇷🇺 Русский', 'lang:ru').text('🇺🇿 O‘zbekcha', 'lang:uz'),
     });
   });
 
-  bot.callbackQuery(/^lang:(ru|uz)$/, async (ctx) => {
+  pm.callbackQuery(/^lang:(ru|uz)$/, async (ctx) => {
     const lang = asLang(ctx.match[1]);
     await app.repo.setLanguage(ctx.from.id, lang, app.now());
     await ctx.answerCallbackQuery();
@@ -95,11 +102,11 @@ export function createBot(app: AppContext, botInfo: UserFromGetMe): Bot {
     }
   });
 
-  bot.on('callback_query', async (ctx) => {
+  pm.on('callback_query', async (ctx) => {
     await ctx.answerCallbackQuery();
   });
 
-  bot.on('message:contact', async (ctx) => {
+  pm.on('message:contact', async (ctx) => {
     const lang = await langOf(app, ctx);
     const T = t(lang);
     const contact = ctx.message.contact;
@@ -130,9 +137,9 @@ export function createBot(app: AppContext, botInfo: UserFromGetMe): Bot {
   });
 
   // Data sent by the Mini App via Telegram.WebApp.sendData(): not used, ignore silently.
-  bot.on('message:web_app_data', () => undefined);
+  pm.on('message:web_app_data', () => undefined);
 
-  bot.on('message:text', async (ctx) => {
+  pm.on('message:text', async (ctx) => {
     await ctx.reply(t(await langOf(app, ctx)).help);
   });
 

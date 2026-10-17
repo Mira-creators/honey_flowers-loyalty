@@ -1,6 +1,6 @@
 import type { LoyaltyEvent, LoyaltyRules } from '@honey/core';
 import type { Notifier } from '@honey/service';
-import type { D1Repository } from '../db/d1Repository.js';
+import type { D1Repository, NotificationLogEntry } from '../db/d1Repository.js';
 import type { Env } from '../env.js';
 import { tgCall, webAppKeyboard } from './telegramApi.js';
 import { fmtDate, t } from './texts.js';
@@ -8,7 +8,8 @@ import { fmtDate, t } from './texts.js';
 /**
  * Sends engine events to clients as Telegram messages (one message per client
  * per command). Called by LoyaltyService AFTER the DB commit, via ctx.waitUntil;
- * errors are logged to notifications_log and never reach the HTTP response.
+ * errors are logged to notifications_log (one batch per send) and never reach
+ * the HTTP response.
  */
 export class TelegramNotifier implements Notifier {
   constructor(
@@ -29,6 +30,7 @@ export class TelegramNotifier implements Notifier {
     const contacts = await this.repo.clientContacts([...byClient.keys()]);
     const origin = await this.origin();
     const failures: unknown[] = [];
+    const log: NotificationLogEntry[] = [];
     for (const [clientId, list] of byClient) {
       const contact = contacts.get(clientId);
       const lang = contact?.language ?? 'ru';
@@ -36,11 +38,11 @@ export class TelegramNotifier implements Notifier {
       if (!text) continue;
       const types = list.map((e) => e.type).join(',');
       if (!contact) {
-        await this.repo.logNotification({ clientId: null, telegramId: null, types, text, status: 'skipped', error: 'client not found' });
+        log.push({ clientId: null, telegramId: null, types, text, status: 'skipped', error: 'client not found' });
         continue;
       }
       if (!this.env.BOT_TOKEN) {
-        await this.repo.logNotification({ clientId, telegramId: contact.telegramId, types, text, status: 'skipped', error: 'BOT_TOKEN not set' });
+        log.push({ clientId, telegramId: contact.telegramId, types, text, status: 'skipped', error: 'BOT_TOKEN not set' });
         continue;
       }
       try {
@@ -49,12 +51,13 @@ export class TelegramNotifier implements Notifier {
           text,
           reply_markup: webAppKeyboard(t(lang).openCardButton, origin),
         });
-        await this.repo.logNotification({ clientId, telegramId: contact.telegramId, types, text, status: 'sent' });
+        log.push({ clientId, telegramId: contact.telegramId, types, text, status: 'sent' });
       } catch (err) {
-        await this.repo.logNotification({ clientId, telegramId: contact.telegramId, types, text, status: 'failed', error: String(err) });
+        log.push({ clientId, telegramId: contact.telegramId, types, text, status: 'failed', error: String(err) });
         failures.push(err);
       }
     }
+    await this.repo.logNotifications(log);
     if (failures.length) throw new AggregateError(failures, `${failures.length} notification(s) failed`);
   }
 }

@@ -1,5 +1,5 @@
 import type { Role } from '@honey/contracts';
-import { InitDataError, validateInitData, type StaffMember, type StaffRole } from '@honey/service';
+import { InitDataError, timingSafeEqualStr, validateInitData, type StaffMember, type StaffRole } from '@honey/service';
 import type { MiddlewareHandler } from 'hono';
 import type { AppContext } from './context.js';
 import { HttpError } from './lib/errors.js';
@@ -7,7 +7,12 @@ import { HttpError } from './lib/errors.js';
 /**
  * Who is calling. Authentication:
  *   Authorization: tma <Telegram.WebApp.initData>   (always; signature checked with BOT_TOKEN)
- *   X-Test-User: <telegramId> [+ X-Test-Name]        (TEST_MODE only, browser testing)
+ *   X-Test-User: <id> + X-Test-Key: <TEST_KEY>       (TEST_MODE only, browser testing outside Telegram)
+ *
+ * Browser testers are never real Telegram users: the header is accepted only
+ * with the TEST_KEY secret and only for ids >= TEST_USER_MIN (real Telegram
+ * ids are smaller), so nobody can impersonate a registered client or staff
+ * member with a plain HTTP header.
  *
  * Effective role:
  *   TEST_MODE: role chosen via POST /api/test/role (test_roles), else active staff role, else 'client';
@@ -30,6 +35,9 @@ export type Vars = {
   /** Re-create the AppContext (after the test clock moved). */
   rebuild: () => Promise<AppContext>;
 };
+
+/** Smallest id accepted from X-Test-User (the Mini App generates 900 000 000 + random). */
+export const TEST_USER_MIN = 900_000_000;
 
 function decodeHeader(v: string | undefined): string | null {
   if (!v) return null;
@@ -59,12 +67,23 @@ export async function identify(app: AppContext, headers: Headers): Promise<Calle
         via: 'initData',
       };
     } catch (e) {
-      if (e instanceof InitDataError) throw new HttpError(401, 'unauthorized', `Неверная подпись Telegram (${e.code})`);
+      if (e instanceof InitDataError) {
+        // Telegram refreshes initData only when the Mini App is reopened: tell the app so.
+        if (e.code === 'EXPIRED') throw new HttpError(401, 'expired', 'Сессия устарела: закройте и откройте приложение заново');
+        throw new HttpError(401, 'unauthorized', `Неверная подпись Telegram (${e.code})`);
+      }
       throw e;
     }
   } else if (app.testMode && headers.get('x-test-user')) {
+    const key = headers.get('x-test-key') ?? '';
+    const secret = app.env.TEST_KEY ?? '';
+    if (!secret || !timingSafeEqualStr(key, secret)) {
+      throw new HttpError(401, 'unauthorized', 'Тестовый вход: неверный или не задан ключ (X-Test-Key / TEST_KEY)');
+    }
     const id = Number(headers.get('x-test-user'));
-    if (!Number.isSafeInteger(id) || id <= 0) throw new HttpError(401, 'unauthorized', 'X-Test-User должен быть числом (telegram id)');
+    if (!Number.isSafeInteger(id) || id < TEST_USER_MIN) {
+      throw new HttpError(401, 'unauthorized', `X-Test-User должен быть числом не меньше ${TEST_USER_MIN}`);
+    }
     base = {
       telegramId: id,
       firstName: decodeHeader(headers.get('x-test-name') ?? undefined) ?? `Тестер ${id}`,

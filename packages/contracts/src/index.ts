@@ -3,8 +3,8 @@
  * Both sides import these types. All money/points are integer UZS. Dates are ISO strings.
  *
  * Auth: every /api request carries `Authorization: tma <Telegram.WebApp.initData>`.
- * In TEST_MODE only, a request may instead carry `X-Test-User: <telegramId>` (browser testing
- * outside Telegram). Errors: non-2xx with body ApiError.
+ * In TEST_MODE only, a request may instead carry `X-Test-User: <id >= 900000000>` together with
+ * `X-Test-Key: <TEST_KEY secret>` (browser testing outside Telegram). Errors: non-2xx with body ApiError.
  */
 
 export type Lang = 'ru' | 'uz';
@@ -14,8 +14,10 @@ export type Channel = 'store' | 'delivery';
 export interface ApiError {
   error: {
     code:
-      | 'unauthorized' | 'forbidden' | 'not_found' | 'validation'
+      | 'unauthorized' | 'expired' | 'forbidden' | 'not_found' | 'validation'
       | 'not_registered' | 'insufficient_points' | 'conflict' | 'already_reversed' | 'internal';
+    // 'expired' (401): Telegram initData is older than the server allows — the app must be
+    // closed and reopened from Telegram (initData is refreshed only on reopen).
     message: string; // Russian, safe to show to staff
   };
 }
@@ -38,7 +40,8 @@ export interface HistoryItemDTO {
   id: string;
   at: string;
   kind: HistoryKind;
-  points: number;               // signed change of the points balance
+  points: number;               // signed change of the points balance (purchase: cashback - redeemed)
+  cashback?: number;            // for kind=purchase: points accrued by this purchase, >= 0
   purchaseId?: string;
   purchaseAmount?: number;      // for kind=purchase
   pct?: number;                 // cashback % applied
@@ -67,7 +70,9 @@ export interface ClientSummaryDTO {
   level: LevelInfo;
   next: NextLevelInfo | null;
   card: CardDTO;
-  expiresAt: string | null;     // when the current balance burns (null if balance 0)
+  expiresOn: string | null;     // LAST day the balance is still valid, 'YYYY-MM-DD' Tashkent (null if balance 0)
+  expiresAt: string | null;     // instant the balance burns = start (00:00 Tashkent) of the day AFTER expiresOn;
+                                // kept for compatibility — show expiresOn, not this date
   gifts: GiftDTO[];             // newest first
   history: HistoryItemDTO[];    // newest first, max 50
 }
@@ -105,7 +110,7 @@ export interface SetLangRequest { lang: Lang }
  * In TEST_MODE there is also POST /api/test/register { phone, name } for browser testing.
  */
 
-/** GET /api/staff/client?q=<code | phone digits> */
+/** GET /api/staff/client?q=<code | phone digits | client id (UUID, e.g. picked from `matches`)> */
 export interface StaffClientLookupDTO { client: ClientSummaryDTO | null; matches: Array<{ id: string; name: string; phoneMasked: string }> }
 
 /** POST /api/staff/purchase/preview — nothing is saved */
@@ -190,7 +195,7 @@ export interface TestRoleRequest { role: Role }
 /** POST /api/test/clock { days } — move the global test clock forward by N days (0 resets: { reset: true }) */
 export interface TestClockRequest { days?: number; reset?: boolean }
 /** POST /api/test/run-expiry — runs the daily expiry/warnings job now; returns counts */
-export interface TestRunExpiryDTO { expired: number; warned: number }
+export interface TestRunExpiryDTO { expired: number; warned: number; checked: number; more: boolean }
 /** POST /api/test/reset-me — deletes the caller's client data (to replay onboarding) */
 /** POST /api/test/register { phone, name } — browser-only registration shortcut */
 export interface TestRegisterRequest { phone: string; name: string }

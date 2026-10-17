@@ -4,6 +4,7 @@ import { getBotInfo } from '../bot/bot.js';
 import { tgCall } from '../bot/telegramApi.js';
 import { COMMANDS, TEXTS } from '../bot/texts.js';
 import type { AppContext } from '../context.js';
+import { classifyPhoneOrId } from './owner.js';
 
 /**
  * GET /setup?key=SETUP_KEY — one-click bot setup after deploy:
@@ -71,8 +72,10 @@ export async function handleSetup(c: Context, app: AppContext): Promise<Response
   const ownerArg = c.req.query('owner')?.trim();
   if (ownerArg) {
     await step('addOwner', async () => {
-      const phone = /^\+|\s|-/.test(ownerArg) || /^(998)?\d{9}$/.test(ownerArg) ? normalizePhone(ownerArg) : null;
-      const telegramId = phone ? null : Number(ownerArg);
+      const { kind, value } = classifyPhoneOrId(ownerArg);
+      if (kind === 'ambiguous') throw new Error(`"${ownerArg}" is ambiguous: write a phone as +998… (URL-encode + as %2B) or a Telegram id as id:${ownerArg}`);
+      const phone = kind === 'phone' ? normalizePhone(value) : null;
+      const telegramId = phone ? null : Number(value);
       if (!phone && (!Number.isSafeInteger(telegramId) || telegramId! <= 0)) throw new Error('owner must be a phone (+998…) or a Telegram id');
       const client = phone ? await app.repo.findClientByPhone(phone) : await app.repo.findClientByTelegramId(telegramId!);
       const member = await app.repo.upsertStaff(

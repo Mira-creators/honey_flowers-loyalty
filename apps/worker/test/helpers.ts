@@ -9,6 +9,10 @@ import type { Env } from '../src/env.js';
 export const testEnv = env as unknown as Env;
 export const BOT_TOKEN = testEnv.BOT_TOKEN!;
 export const WEBHOOK_SECRET = testEnv.WEBHOOK_SECRET!;
+export const TEST_KEY = testEnv.TEST_KEY!;
+
+/** Browser tester ids must be >= 900 000 000 (auth.ts TEST_USER_MIN). */
+export const T = 900_000_000;
 
 export interface TgCall {
   method: string;
@@ -89,7 +93,10 @@ export interface ReqOpts {
 /** Call the Hono app as a tester (X-Test-User) and wait for background work. */
 export async function call(path: string, opts: ReqOpts = {}): Promise<Response> {
   const headers: Record<string, string> = { ...(opts.headers ?? {}) };
-  if (opts.user !== undefined) headers['x-test-user'] = String(opts.user);
+  if (opts.user !== undefined) {
+    headers['x-test-user'] = String(opts.user);
+    if (!('x-test-key' in headers)) headers['x-test-key'] = TEST_KEY;
+  }
   if (opts.name) headers['x-test-name'] = encodeURIComponent(opts.name);
   if (opts.body !== undefined) headers['content-type'] = 'application/json';
   const { ctx, flush } = execCtx();
@@ -158,6 +165,7 @@ export function commandUpdate(fromId: number, command: string) {
 
 /** Register a client through the TEST_MODE shortcut. */
 export async function register(user: number, phone = `+99890${String(user).padStart(7, '0').slice(-7)}`, name = `Клиент ${user}`): Promise<MeDTO> {
+  // Browser testers may register any phone except a staff member's; real users go through the bot.
   const res = await call('/api/test/register', { user, body: { phone, name } });
   if (res.status !== 201) throw new Error(`register failed: ${res.status} ${await res.text()}`);
   return json<MeDTO>(res);
@@ -185,6 +193,6 @@ export async function buy(staff: number, clientId: string, amount: number, extra
 
 /** Move the global test clock (days) — as a tester. */
 export async function moveClock(days: number) {
-  const res = await call('/api/test/clock', { user: 1, body: { days } });
+  const res = await call('/api/test/clock', { user: T + 1, body: { days } });
   if (res.status !== 200) throw new Error(`clock failed: ${res.status} ${await res.text()}`);
 }

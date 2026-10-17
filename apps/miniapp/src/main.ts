@@ -73,14 +73,17 @@ function loginView() {
     <p>${T(S.lang).openInTg}</p>
     <div class="form" style="width:100%;margin-top:10px">
       <label class="fl" for="tName">Тестовый вход без Telegram — ваше имя</label><input id="tName" autocomplete="off" placeholder="Например, Велимира">
+      <label class="fl" for="tKey" style="margin-top:8px">Ключ тестового доступа (TEST_KEY)</label><input id="tKey" type="password" autocomplete="off" placeholder="выдаёт администратор" value="${esc(getTestUser()?.key || '')}">
       <button class="b acc full" data-act="testLogin" style="margin-top:8px">Войти как тестер</button>
       <p class="mut" style="font-size:12px">Работает только в тестовой версии. Сканер QR и уведомления доступны только в Telegram.</p>
     </div></div></main>`;
 }
 actions.testLogin = async () => {
   const n = (document.getElementById('tName') as HTMLInputElement).value.trim();
+  const k = (document.getElementById('tKey') as HTMLInputElement).value.trim();
   if (n.length < 2) { toast('Введите имя', 'error'); return; }
-  setTestUser(n); S.needsLogin = false; S.loading = true; render(); await refresh();
+  if (!k) { toast('Введите ключ тестового доступа', 'error'); return; }
+  setTestUser(n, k); S.needsLogin = false; S.loading = true; render(); await refresh();
 };
 function errorView() {
   const t = T(S.lang);
@@ -136,7 +139,7 @@ document.addEventListener('change', e => {
 document.addEventListener('keydown', e => {
   const t = e.target as HTMLElement;
   if (e.key === 'Enter' && t.id === 'q') actions.search?.(t, e);
-  if (e.key === 'Enter' && t.id === 'tName') actions.testLogin?.(t, e);
+  if (e.key === 'Enter' && (t.id === 'tName' || t.id === 'tKey')) actions.testLogin?.(t, e);
 });
 
 /* ---------- live polling: the client sees a purchase made on the florist's phone ---------- */

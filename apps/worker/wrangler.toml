@@ -49,5 +49,8 @@ BOT_USERNAME = ""
 #   BOT_TOKEN       token from @BotFather
 #   WEBHOOK_SECRET  random string (A–Z, a–z, 0–9, _ and -), Telegram echoes it in every webhook call
 #   SETUP_KEY       random string that protects GET /setup?key=...
-# Optional plain variable:
-#   PUBLIC_URL      https://honey-loyalty.<subdomain>.workers.dev (otherwise taken from the /setup request)
+#   TEST_KEY        (TEST_MODE only) random string the browser test login sends as X-Test-Key;
+#                   without it the X-Test-User header is rejected, so strangers cannot act as testers
+# Optional plain variables:
+#   PUBLIC_URL        https://honey-loyalty.<subdomain>.workers.dev (otherwise taken from the /setup request)
+#   CRON_MAX_CLIENTS  clients the daily job processes per run (default 40; the rest wait for the next day)

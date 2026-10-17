@@ -20,6 +20,10 @@ export interface Env {
   WEBHOOK_SECRET?: string;
   /** Secret: protects GET /setup?key=... */
   SETUP_KEY?: string;
+  /** Secret, TEST_MODE only: required in X-Test-Key next to X-Test-User (browser testing). Unset = browser testing off. */
+  TEST_KEY?: string;
+  /** Daily job: clients processed per run (default 40, see cron.ts). */
+  CRON_MAX_CLIENTS?: string;
 
   /** Tests only: base URL of the Telegram Bot API (default https://api.telegram.org). */
   TELEGRAM_API_BASE?: string;

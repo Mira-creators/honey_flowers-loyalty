@@ -55,7 +55,7 @@ app.use('/api/*', async (c, next) => {
   if (!isTestMode(c.env)) return next();
   return cors({
     origin: (origin) => (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin) ? origin : null),
-    allowHeaders: ['Authorization', 'Content-Type', 'X-Test-User', 'X-Test-Name'],
+    allowHeaders: ['Authorization', 'Content-Type', 'X-Test-User', 'X-Test-Name', 'X-Test-Key'],
     allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     maxAge: 600,
   })(c, next);

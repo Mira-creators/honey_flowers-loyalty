@@ -1,8 +1,9 @@
 import type { EditableRulesDTO, MeDTO } from '@honey/contracts';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { call, commandUpdate, contactUpdate, json, makeStaff, messageUpdate, mockTelegram, repo, resetDb, webhook } from './helpers.js';
+import { call, commandUpdate, contactUpdate, json, makeStaff, messageUpdate, mockTelegram, repo, resetDb, T, tmaHeader, webhook } from './helpers.js';
 
 const USER = 6001;
+const OWNER = T + 1;
 
 let tg: ReturnType<typeof mockTelegram>;
 beforeEach(async () => {
@@ -41,9 +42,9 @@ describe('telegram webhook', () => {
 
   it('registration via contact: client created, phone normalized, welcome bonus credited, keyboard removed', async () => {
     // Owner sets a welcome bonus first.
-    await makeStaff(1, 'owner');
-    const rules = await json<EditableRulesDTO>(call('/api/owner/rules', { user: 1 }));
-    await call('/api/owner/rules', { user: 1, method: 'PUT', body: { ...rules, welcomeBonus: 10_000 } });
+    await makeStaff(OWNER, 'owner');
+    const rules = await json<EditableRulesDTO>(call('/api/owner/rules', { user: OWNER }));
+    await call('/api/owner/rules', { user: OWNER, method: 'PUT', body: { ...rules, welcomeBonus: 10_000 } });
 
     const res = await webhook(contactUpdate(USER, '998 90 765 43 21'));
     expect(res.status).toBe(200);
@@ -57,7 +58,7 @@ describe('telegram webhook', () => {
     expect(welcome!.payload.reply_markup).toEqual({ remove_keyboard: true });
     expect(card!.payload.reply_markup).toMatchObject({ inline_keyboard: [[{ web_app: { url: 'https://honey.example.workers.dev' } }]] });
 
-    const me = await json<MeDTO>(call('/api/me', { user: USER }));
+    const me = await json<MeDTO>(call('/api/me', { headers: await tmaHeader(USER) }));
     expect(me.registered).toBe(true);
     expect(me.client!.balance).toBe(10_000);
     expect(me.client!.history[0]).toMatchObject({ kind: 'welcome', points: 10_000 });
@@ -66,7 +67,7 @@ describe('telegram webhook', () => {
     await webhook(contactUpdate(USER, '+998907654321'));
     expect(lastText()).toBe('Ваша медовая карта 👇');
     expect(String(tg.sent().at(-2)!.payload.text)).toContain('Вы уже участник');
-    expect((await json<MeDTO>(call('/api/me', { user: USER }))).client!.balance).toBe(10_000);
+    expect((await json<MeDTO>(call('/api/me', { headers: await tmaHeader(USER) }))).client!.balance).toBe(10_000);
 
     // /start for a registered user: no contact keyboard.
     await webhook(commandUpdate(USER, '/start'));

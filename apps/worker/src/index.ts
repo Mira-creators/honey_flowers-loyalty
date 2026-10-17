@@ -10,6 +10,6 @@ export default {
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     const appCtx = await createContext(env, { waitUntil: (p) => ctx.waitUntil(p) });
     const res = await runDailyJob(appCtx);
-    console.log(`daily job (${controller.cron}): expired=${res.expired} warned=${res.warned}`);
+    console.log(`daily job (${controller.cron}): checked=${res.checked} expired=${res.expired} warned=${res.warned} failed=${res.failed} more=${res.more}`);
   },
 } satisfies ExportedHandler<Env>;

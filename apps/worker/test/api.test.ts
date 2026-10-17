@@ -12,11 +12,11 @@ import type {
 } from '@honey/contracts';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import app from '../src/app.js';
-import { buy, call, json, key, makeStaff, mockTelegram, moveClock, register, repo, resetDb, setRole, testEnv, tmaHeader } from './helpers.js';
+import { buy, call, json, key, makeStaff, mockTelegram, moveClock, register, repo, resetDb, setRole, T, testEnv, tmaHeader } from './helpers.js';
 
-const FLORIST = 1001;
-const OWNER = 1002;
-const CLIENT = 5001;
+const FLORIST = T + 1001;
+const OWNER = T + 1002;
+const CLIENT = T + 5001;
 
 let tg: ReturnType<typeof mockTelegram>;
 beforeEach(async () => {
@@ -47,7 +47,7 @@ describe('auth', () => {
 
     const stale = await call('/api/me', { headers: await tmaHeader(CLIENT, {}, new Date(Date.now() - 2 * 86_400_000)) });
     expect(stale.status).toBe(401);
-    expect((await json(stale)).error.message).toMatch(/EXPIRED/);
+    expect((await json(stale)).error.code).toBe('expired');
   });
 
   it('X-Test-User works only in TEST_MODE; /api/test/* is 404 otherwise', async () => {
@@ -331,24 +331,28 @@ describe('owner', () => {
   });
 
   it('staff management: add by telegram id or phone, deactivate', async () => {
-    const add = await call('/api/owner/staff', { user: OWNER, body: { phoneOrTelegramId: 7777, role: 'florist' } });
+    const NEW = T + 7777;
+    const add = await call('/api/owner/staff', { user: OWNER, body: { phoneOrTelegramId: `id:${NEW}`, role: 'florist' } });
     expect(add.status).toBe(201);
     const member = await json<StaffDTO>(add);
-    expect(member).toMatchObject({ telegramId: 7777, role: 'florist', active: true });
-    expect((await json<MeDTO>(call('/api/me', { user: 7777 }))).role).toBe('florist');
+    expect(member).toMatchObject({ telegramId: NEW, role: 'florist', active: true });
+    expect((await json<MeDTO>(call('/api/me', { user: NEW }))).role).toBe('florist');
 
-    // Added by phone before the person ever opened the bot: linked when they share the phone.
+    // Added by phone before the person ever opened the bot: linked when they share the phone
+    // (a real Telegram user; a browser tester may not take a staff member's phone).
     const byPhone = await json<StaffDTO>(call('/api/owner/staff', { user: OWNER, body: { phoneOrTelegramId: '+998 93 555 44 33', role: 'manager', name: 'Менеджер' } }));
     expect(byPhone).toMatchObject({ telegramId: null, role: 'manager', name: 'Менеджер' });
-    await register(8888, '+998935554433');
-    expect((await json<MeDTO>(call('/api/me', { user: 8888 }))).role).toBe('manager');
+    const REAL = 8888;
+    const reg = await call('/api/test/register', { headers: await tmaHeader(REAL), body: { phone: '+998935554433', name: 'Менеджер' } });
+    expect(reg.status).toBe(201);
+    expect((await json<MeDTO>(call('/api/me', { headers: await tmaHeader(REAL) }))).role).toBe('manager');
 
     const list = await json<StaffDTO[]>(call('/api/owner/staff', { user: OWNER }));
     expect(list.map((s) => s.name)).toEqual(expect.arrayContaining(['Флорист Нигора', 'Владелец', 'Менеджер']));
 
     const del = await call(`/api/owner/staff/${member.id}`, { user: OWNER, method: 'DELETE' });
     expect((await json<StaffDTO>(del)).active).toBe(false);
-    expect((await json<MeDTO>(call('/api/me', { user: 7777 }))).role).toBe('client');
+    expect((await json<MeDTO>(call('/api/me', { user: NEW }))).role).toBe('client');
   });
 
   it('stats and operations', async () => {
@@ -391,12 +395,12 @@ describe('test clock and expiry', () => {
     expect(Date.parse(meMoved.now) - Date.now()).toBeGreaterThan(75 * 86_400_000);
 
     const warn = await json(call('/api/test/run-expiry', { user: CLIENT, body: {} }));
-    expect(warn).toEqual({ expired: 0, warned: 1 });
+    expect(warn).toMatchObject({ expired: 0, warned: 1 });
     expect(String(tg.sent().at(-1)!.payload.text)).toMatch(/Через 14 дней сгорит 5 000 мёда/);
-    expect(await json(call('/api/test/run-expiry', { user: CLIENT, body: {} }))).toEqual({ expired: 0, warned: 0 });
+    expect(await json(call('/api/test/run-expiry', { user: CLIENT, body: {} }))).toMatchObject({ expired: 0, warned: 0 });
 
     await moveClock(14);
-    expect(await json(call('/api/test/run-expiry', { user: CLIENT, body: {} }))).toEqual({ expired: 1, warned: 0 });
+    expect(await json(call('/api/test/run-expiry', { user: CLIENT, body: {} }))).toMatchObject({ expired: 1, warned: 0 });
     const after = await json<MeDTO>(call('/api/me', { user: CLIENT }));
     expect(after.client!.balance).toBe(0);
     expect(after.client!.expiresAt).toBeNull();
@@ -461,10 +465,15 @@ describe('setup and misc', () => {
     // First owner by phone: linked when that person shares the phone with the bot.
     const withOwner = await json(call('/setup?key=test-setup-key&owner=%2B998901110000'));
     expect(withOwner.steps.at(-1)).toMatchObject({ step: 'addOwner', ok: true });
-    await register(CLIENT, '+998901110000');
-    expect((await json<MeDTO>(call('/api/me', { user: CLIENT }))).role).toBe('owner');
+    const REAL = 4241;
+    expect((await call('/api/test/register', { headers: await tmaHeader(REAL), body: { phone: '+998901110000', name: 'Владелец' } })).status).toBe(201);
+    expect((await json<MeDTO>(call('/api/me', { headers: await tmaHeader(REAL) }))).role).toBe('owner');
     const byId = await json(call('/setup?key=test-setup-key&owner=4242'));
     expect(byId.steps.at(-1)).toMatchObject({ step: 'addOwner', ok: true, detail: { telegramId: 4242 } });
+    const byPrefixedId = await json(call('/setup?key=test-setup-key&owner=id:123456789'));
+    expect(byPrefixedId.steps.at(-1)).toMatchObject({ step: 'addOwner', ok: true, detail: { telegramId: 123456789 } });
+    const ambiguous = await json(call('/setup?key=test-setup-key&owner=901234567'));
+    expect(ambiguous.steps.at(-1)).toMatchObject({ step: 'addOwner', ok: false });
   });
 
   it('health, unknown API routes and CORS for localhost in TEST_MODE', async () => {

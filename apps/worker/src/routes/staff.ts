@@ -36,6 +36,13 @@ staffRoutes.use('*', async (c, next) => {
 
 const uzs = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
 
+/** rules.maxPurchaseAmount (typo guard) as a 400 with a Russian message, before the engine sees it. */
+function checkAmount(rules: LoyaltyRules, amount: number) {
+  if (amount > rules.maxPurchaseAmount) {
+    throw new HttpError(400, 'validation', `Сумма покупки не может превышать ${rules.maxPurchaseAmount.toLocaleString('ru-RU')} сум`);
+  }
+}
+
 const previewSchema = z.object({
   clientId: z.string().min(1),
   amount: uzs,
@@ -50,29 +57,33 @@ const purchaseSchema = previewSchema.extend({
 
 // ------------------------------------------------------------ lookup
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /**
- * Parse the staff search query: short code ("HF4821", "hf4821"), a scanned QR
- * payload ("HF:HF4821" or "HF:4821"), or phone digits (any formatting, 4+ digits).
+ * Parse the staff search query: a client id (UUID, as sent when the florist picks
+ * one of `matches`), short code ("HF4821", "hf4821"), a scanned QR payload
+ * ("HF:HF4821" or "HF:4821"), or phone digits (any formatting, 4+ digits).
  */
-export function parseLookup(q: string): { code: string | null; phone: string | null } {
+export function parseLookup(q: string): { id: string | null; code: string | null; phone: string | null } {
   let s = q.trim();
+  if (UUID_RE.test(s)) return { id: s.toLowerCase(), code: null, phone: null };
   if (/^HF:/i.test(s)) s = s.slice(3).trim();
   const compact = s.replace(/[\s-]/g, '');
-  if (/^HF\d{4,6}$/i.test(compact)) return { code: compact.toUpperCase(), phone: null };
+  if (/^HF\d{4,6}$/i.test(compact)) return { id: null, code: compact.toUpperCase(), phone: null };
   const digits = phoneDigits(s);
-  if (/^\d{4,6}$/.test(compact)) return { code: `HF${compact}`, phone: digits };
-  return { code: null, phone: digits.length >= 4 ? digits : null };
+  if (/^\d{4,6}$/.test(compact)) return { id: null, code: `HF${compact}`, phone: digits };
+  return { id: null, code: null, phone: digits.length >= 4 ? digits : null };
 }
 
 staffRoutes.get('/client', async (c) => {
   const app = c.get('app');
   const q = c.req.query('q') ?? '';
-  const { code, phone } = parseLookup(q);
-  if (!code && !phone) throw new HttpError(400, 'validation', 'Введите код карты (HF…) или минимум 4 цифры телефона');
+  const { id, code, phone } = parseLookup(q);
+  if (!id && !code && !phone) throw new HttpError(400, 'validation', 'Введите код карты (HF…) или минимум 4 цифры телефона');
   const now = app.now();
   const { rules } = await app.repo.getActiveRules(now);
 
-  let exact: ClientProfile | null = code ? await app.repo.findClientByCode(code) : null;
+  let exact: ClientProfile | null = id ? await app.repo.findClientById(id) : code ? await app.repo.findClientByCode(code) : null;
   let matches: ClientProfile[] = [];
   if (exact) matches = [exact];
   else if (phone) {
@@ -143,6 +154,7 @@ staffRoutes.post('/purchase/preview', async (c) => {
   await ensureClient(app, req.clientId);
   const now = app.now();
   const { rules } = await app.repo.getActiveRules(now);
+  checkAmount(rules, req.amount);
   const { state } = await app.repo.loadClientState(req.clientId);
   const plan = planPurchase(rules, state, req, 'preview', `preview-${crypto.randomUUID()}`, null, now);
   const outcome = applyPurchase(rules, state, plan.input, now);
@@ -155,6 +167,7 @@ staffRoutes.post('/purchase', async (c) => {
   const caller = c.get('caller');
   const req = purchaseSchema.parse(await c.req.json());
   await ensureClient(app, req.clientId);
+  checkAmount((await app.repo.getActiveRules(app.now())).rules, req.amount);
   const other = await app.repo.findPurchaseByIdempotencyKey(req.idempotencyKey);
   if (other && other.clientId !== req.clientId) {
     throw new HttpError(409, 'conflict', 'Этот ключ операции уже использован для другого клиента');
