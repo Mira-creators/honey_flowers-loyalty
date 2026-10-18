@@ -1,14 +1,15 @@
-/** Owner screens: stats, rules editor, team, operations log. (The cash desk tab reuses the staff screen.) */
+/** Owner screens: stats, clients, rules editor, team, operations log. (The cash desk tab reuses the staff screen.) */
 import type { EditableRulesDTO, StaffDTO } from '@honey/contracts';
 import { S, actions, changes, inputs, app } from '../state';
 import { GIFT_LABELS } from '../config/texts';
 import { api, ApiErr } from '../api';
 import { esc, fmt, toast } from '../ui/dom';
 import { opRow } from './staff';
+import { clientsView, loadClients } from './clients';
 
 export function ownerView(): string {
   const o = S.owner;
-  const body = o.tab === 'stats' ? statsView() : o.tab === 'rules' ? rulesView() : o.tab === 'staff' ? teamView() : opsView();
+  const body = o.tab === 'stats' ? statsView() : o.tab === 'clients' ? clientsView() : o.tab === 'rules' ? rulesView() : o.tab === 'staff' ? teamView() : opsView();
   return `<main class="scr" id="scr">${body}</main>`;
 }
 
@@ -16,6 +17,7 @@ export async function loadOwnerTab() {
   const o = S.owner; o.error = null;
   try {
     if (o.tab === 'stats') o.stats = await api.stats();
+    else if (o.tab === 'clients') { await loadClients(true); return; }
     else if (o.tab === 'rules') { o.rules = await api.rules(); o.draft = structuredClone(o.rules); }
     else if (o.tab === 'staff') o.staffList = await api.staff();
     else if (o.tab === 'ops') o.ops = await api.operations();

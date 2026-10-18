@@ -7,6 +7,7 @@ import { isTestMode, type Env } from './env.js';
 import { HttpError, toApiError } from './lib/errors.js';
 import { clientRoutes } from './routes/client.js';
 import { ownerRoutes } from './routes/owner.js';
+import { exportByToken } from './routes/ownerClients.js';
 import { handleSetup } from './routes/setup.js';
 import { staffRoutes } from './routes/staff.js';
 import { testRoutes } from './routes/test.js';
@@ -80,6 +81,13 @@ api.route('/test', testRoutes);
 app.all('/api/test/*', async (c, next) => {
   if (!isTestMode(c.env)) throw new HttpError(404, 'not_found', 'Не найдено');
   await next();
+});
+// CSV export via a one-time link (?token=…) opened in a normal browser: no auth header there.
+// Without a token the request goes on to the authenticated owner route.
+app.use('/api/owner/export/:file', async (c, next) => {
+  const token = c.req.query('token');
+  if (c.req.method !== 'GET' || !token) return next();
+  return exportByToken(c, c.get('app'), c.req.param('file'), token);
 });
 app.route('/api', api);
 app.all('/api/*', () => {

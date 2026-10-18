@@ -10,6 +10,7 @@ import { tashkentDayStartIso } from '../lib/dto.js';
 import { HttpError } from '../lib/errors.js';
 import { applyEditable, toEditable } from '../lib/rulesEditor.js';
 import { operationsFor } from '../lib/summary.js';
+import { ownerClientRoutes } from './ownerClients.js';
 
 export const ownerRoutes = new Hono<{ Variables: Vars }>();
 
@@ -163,3 +164,7 @@ ownerRoutes.get('/operations', async (c) => {
   const limit = z.coerce.number().int().min(1).max(500).catch(100).parse(c.req.query('limit') ?? 100);
   return c.json(await operationsFor(c.get('app'), limit));
 });
+
+// ------------------------------------------------------------ client base, manual adjustment, CSV export
+
+ownerRoutes.route('/', ownerClientRoutes);

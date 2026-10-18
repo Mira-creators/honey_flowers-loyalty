@@ -26,12 +26,15 @@ not_found_handling = "single-page-application"
 # These paths go to the Worker code first; everything else is served from the static files.
 run_worker_first = ["/api/*", "/telegram/*", "/setup", "/health"]
 
+# Two Workers are built from this one file (docs/DEPLOY.md, "Два окружения"):
+#   honey-loyalty  (branch dev,  database honey-loyalty,        test bot)   — our playground
+#   honeyflowers   (branch main, database honey-loyalty-client, client bot) — what the client uses
+# Which one a build produces is decided by scripts/select-env.mjs from the branch Cloudflare passes
+# in WORKERS_CI_BRANCH: it rewrites `name` and `database_id` below before `wrangler deploy`.
 [[d1_databases]]
 binding = "DB"
-database_name = "honey-loyalty-client"
-# Database ID of the CLIENT database (create it in the dashboard, name exactly honey-loyalty-client),
-# see docs/DEPLOY.md. The zero id below works only for local development (`--local`).
-database_id = "00000000-0000-0000-0000-000000000000"
+database_name = "honey-loyalty"
+database_id = "eda1f266-41a7-4db4-bd94-f3391d7db9b1"
 migrations_dir = "migrations"
 
 # Daily job at 04:00 UTC = 09:00 Asia/Tashkent: points expiry + reminders.
@@ -54,32 +57,3 @@ BOT_USERNAME = ""
 # Optional plain variables:
 #   PUBLIC_URL        https://honey-loyalty.<subdomain>.workers.dev (otherwise taken from the /setup request)
 #   CRON_MAX_CLIENTS  clients the daily job processes per run (default 40; the rest wait for the next day)
-
-# ---------------------------------------------------------------------------
-# DEV environment = our playground: Worker "honey-loyalty-dev", the ORIGINAL test database and the
-# test bot @honeyflowers_test_bot, built from the `dev` branch. The top-level config above is the
-# CLIENT Worker "honey-loyalty" with a clean database and the client's bot, built from `main`.
-# Deploy command for the dev Worker: npx wrangler d1 migrations apply honey-loyalty --remote --env dev && npx wrangler deploy --env dev
-# Secrets are per Worker: BOT_TOKEN, WEBHOOK_SECRET, SETUP_KEY, TEST_KEY on each.
-[env.dev]
-name = "honey-loyalty-dev"
-
-[env.dev.assets]
-directory = "../miniapp/dist"
-binding = "ASSETS"
-not_found_handling = "single-page-application"
-run_worker_first = ["/api/*", "/telegram/*", "/setup", "/health"]
-
-[[env.dev.d1_databases]]
-binding = "DB"
-# The DEV environment reuses the ORIGINAL test database (all the test data lives here).
-database_name = "honey-loyalty"
-database_id = "eda1f266-41a7-4db4-bd94-f3391d7db9b1"
-migrations_dir = "migrations"
-
-[env.dev.triggers]
-crons = ["0 4 * * *"]
-
-[env.dev.vars]
-TEST_MODE = "1"
-BOT_USERNAME = ""

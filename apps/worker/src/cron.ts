@@ -50,8 +50,8 @@ export async function runDailyJob(app: AppContext, maxClients?: number): Promise
       const outcome = runExpiry(rules, loaded.state, now);
       if (hasEffects(outcome)) {
         try {
-          await app.repo.saveOutcome(id, outcome, loaded.version);
           after = applyOutcome(loaded.state, outcome);
+          await app.repo.saveOutcome(id, outcome, loaded.version, { rules, state: after, now });
           events.push(...outcome.events);
         } catch (e) {
           if (!(e instanceof ConcurrencyError)) throw e;

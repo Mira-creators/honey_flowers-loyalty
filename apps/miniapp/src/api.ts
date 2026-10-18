@@ -1,7 +1,8 @@
 import type {
   MeDTO, SetLangRequest, StaffClientLookupDTO, PurchasePreviewRequest, PurchasePreviewDTO, PurchaseRequest,
   PurchaseResultDTO, ReverseResultDTO, UseGiftResultDTO, OperationDTO, OwnerStatsDTO, EditableRulesDTO, StaffDTO,
-  Role, TestRunExpiryDTO, ApiError,
+  Role, TestRunExpiryDTO, ApiError, ClientListDTO, ClientSort, ClientStatus, OwnerClientDTO, AdjustRequest, AdjustResultDTO,
+  NoteDTO, ExportLinkRequest, ExportLinkDTO,
 } from '@honey/contracts';
 import { tg } from './tg';
 
@@ -76,6 +77,15 @@ export const api = {
   addStaff: (phoneOrTelegramId: string, role: StaffDTO['role']) => req<StaffDTO>('POST', '/api/owner/staff', { phoneOrTelegramId, role }),
   removeStaff: (id: string) => req<unknown>('DELETE', `/api/owner/staff/${encodeURIComponent(id)}`),
   operations: (limit = 100) => req<OperationDTO[]>('GET', `/api/owner/operations?limit=${limit}`),
+  clients: (p: { q?: string; status?: ClientStatus | ''; sort?: ClientSort; cursor?: string | null; limit?: number }) => {
+    const qs = new URLSearchParams();
+    for (const [k, v] of Object.entries(p)) if (v !== undefined && v !== null && v !== '') qs.set(k, String(v));
+    return req<ClientListDTO>('GET', '/api/owner/clients?' + qs.toString());
+  },
+  client: (id: string) => req<OwnerClientDTO>('GET', `/api/owner/clients/${encodeURIComponent(id)}`),
+  adjust: (id: string, b: AdjustRequest) => req<AdjustResultDTO>('POST', `/api/owner/clients/${encodeURIComponent(id)}/adjust`, b),
+  note: (id: string, note: string) => req<NoteDTO>('PUT', `/api/owner/clients/${encodeURIComponent(id)}/note`, { note }),
+  exportLink: (b: ExportLinkRequest) => req<ExportLinkDTO>('POST', '/api/owner/export/link', b),
 
   test: {
     role: (role: Role) => req<unknown>('POST', '/api/test/role', { role }),

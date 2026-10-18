@@ -172,6 +172,24 @@ select + .calc, select { margin-bottom: 10px; }
 .cells-ed select { padding: 6px 2px; font-size: 11.5px; border-radius: 8px; margin: 0; }
 .sticky-save { position: sticky; bottom: 0; background: linear-gradient(transparent, var(--c-bg) 30%); padding: 18px 0 4px; display: grid; justify-items: center; gap: 4px; }
 
+/* owner: clients */
+.hdr-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.hdr-row .h { margin-bottom: 0; }
+.b.sm { min-height: 36px; padding: 7px 12px; font-size: 13px; }
+.search.one { grid-template-columns: 1fr; }
+.chips.scroll { flex-wrap: nowrap; overflow-x: auto; margin: 10px -2px 4px; padding: 2px; scrollbar-width: none; }
+.chips.scroll::-webkit-scrollbar { display: none; }
+.chips.scroll .chip { flex: none; }
+.badge { display: inline-block; font-size: 10.5px; font-weight: 700; padding: 1px 7px; border-radius: 99px; background: var(--c-surface); color: var(--c-accent-deep); vertical-align: 1px; }
+.gift-n { font-size: 12.5px; font-weight: 700; color: var(--c-petal-deep); white-space: nowrap; }
+.btn-it { border: 0; width: 100%; text-align: left; font: inherit; cursor: pointer; }
+.empty { text-align: center; padding: 26px 8px; display: grid; gap: 4px; justify-items: center; }
+.empty p { margin: 0; max-width: 34ch; }
+.bal.small { margin-top: 2px; }
+.exp-url { margin-top: 12px; }
+.exp-url input { font-size: 13px; margin-bottom: 8px; }
+textarea { width: 100%; border: 1px solid var(--c-line); background: var(--c-surface); color: var(--c-ink); border-radius: 12px; padding: 10px 12px; font: 500 15px var(--font-body); resize: vertical; }
+
 /* overlays */
 .toast { position: fixed; left: 50%; bottom: calc(86px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); max-width: calc(100% - 32px); width: max-content; background: var(--c-ink); color: var(--c-bg); padding: 10px 16px; border-radius: 16px; font-size: 13.5px; z-index: 60; animation: popin2 .3s ease; text-align: center; transition: opacity .3s; }
 .toast.error { background: var(--c-bad); color: #fff; }

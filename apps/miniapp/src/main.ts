@@ -11,6 +11,7 @@ import { IC } from './ui/icons';
 import { clientView, animateClientChange } from './screens/client';
 import { staffView, loadRecent } from './screens/staff';
 import { ownerView, loadOwnerTab } from './screens/owner';
+import { closeClientCard } from './screens/clients';
 import { testButton } from './screens/testbar';
 
 const root = document.getElementById('app')!;
@@ -28,7 +29,7 @@ tg.ready(); paintTheme(); tg.onThemeChanged(paintTheme);
 
 /* ---------- navigation for staff roles ---------- */
 const NAV: Record<string, Array<[OwnerTab, string, string]>> = {
-  owner: [['desk', 'Касса', IC.card], ['stats', 'Статистика', IC.stats], ['rules', 'Правила', IC.rules], ['staff', 'Команда', IC.people], ['ops', 'Журнал', IC.list]],
+  owner: [['desk', 'Касса', IC.card], ['stats', 'Статистика', IC.stats], ['clients', 'Клиенты', IC.clients], ['rules', 'Правила', IC.rules], ['staff', 'Команда', IC.people], ['ops', 'Журнал', IC.list]],
 };
 function staffNav(role: string) {
   const items = NAV[role]; if (!items) return '';
@@ -51,17 +52,17 @@ function render() {
     const role = S.me.role;
     if (role === 'client') { html = clientView(); key = 'c-' + (S.me.registered ? S.screen : 'onb'); }
     else if (role === 'florist' || role === 'manager') { html = staffView(); key = 's-' + S.staff.step; }
-    else { html = (S.owner.tab === 'desk' ? staffView() : ownerView()) + staffNav(role); key = 'o-' + S.owner.tab + (S.owner.tab === 'desk' ? S.staff.step : ''); }
+    else { html = (S.owner.tab === 'desk' ? staffView() : ownerView()) + staffNav(role); key = 'o-' + S.owner.tab + (S.owner.tab === 'desk' ? S.staff.step : S.owner.tab === 'clients' && S.owner.cl.cardId ? '-card' : ''); }
   }
   // Keep what the user is typing: a late data arrival (recent list, owner tab) must not wipe an input.
   const active = document.activeElement as HTMLInputElement | null;
-  const keep = active && root.contains(active) && (active.tagName === 'INPUT' || active.tagName === 'SELECT') && active.id
+  const keep = active && root.contains(active) && (active.tagName === 'INPUT' || active.tagName === 'SELECT' || active.tagName === 'TEXTAREA') && active.id
     ? { id: active.id, value: active.value, start: active.selectionStart, end: active.selectionEnd } : null;
   root.innerHTML = html + testButton();
   root.dataset.view = key;
   if (keep && prevKey === key) {
     const el = document.getElementById(keep.id) as HTMLInputElement | null;
-    if (el) { if (el.tagName === 'INPUT' && el.value !== keep.value) el.value = keep.value; el.focus({ preventScroll: true }); try { if (keep.start != null) el.setSelectionRange(keep.start, keep.end); } catch { /* number inputs */ } }
+    if (el) { if (el.tagName !== 'SELECT' && el.value !== keep.value) el.value = keep.value; el.focus({ preventScroll: true }); try { if (keep.start != null) el.setSelectionRange(keep.start, keep.end); } catch { /* number inputs */ } }
   }
   const scr = document.getElementById('scr');
   if (scr && prevKey === key) scr.scrollTop = prevScroll;
@@ -72,6 +73,7 @@ app.render = render;
 function setBack() {
   if (!S.me) return tg.backButton(null);
   if (S.me.role === 'client' && S.me.registered && S.screen !== 'home') return tg.backButton(() => { S.screen = 'home'; render(); });
+  if (S.me.role === 'owner' && S.owner.tab === 'clients' && S.owner.cl.cardId) return tg.backButton(closeClientCard);
   if (S.me.role !== 'client' && (S.me.role === 'florist' || S.me.role === 'manager' || S.owner.tab === 'desk') && S.staff.step !== 'find') return tg.backButton(() => { resetStaff(); render(); loadRecent(); });
   tg.backButton(null);
 }

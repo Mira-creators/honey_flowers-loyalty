@@ -74,7 +74,7 @@ export async function loadRecent() {
   if (S.staff.step === 'find') app.render();
 }
 
-async function openClient(q: string) {
+export async function openClient(q: string) {
   try {
     const r = await api.lookup(q);
     if (r.client) {

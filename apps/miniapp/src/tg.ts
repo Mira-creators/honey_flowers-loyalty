@@ -50,6 +50,8 @@ export const tg = {
       } catch { done = true; w.offEvent?.('scanQrPopupClosed', closed); res(null); }
     });
   },
+  /** Opens a normal web page outside the Mini App (Telegram's WebView cannot download files). */
+  openLink(url: string) { const w = W(); if (tg.inTelegram && w?.openLink) w.openLink(url); else window.open(url, '_blank', 'noopener'); },
   openTelegramLink(url: string) { const w = W(); if (tg.inTelegram && w?.openTelegramLink) w.openTelegramLink(url); else window.open(url, '_blank', 'noopener'); },
   backButton(cb: (() => void) | null) {
     const b = W()?.BackButton; if (!b || !tg.inTelegram) return;

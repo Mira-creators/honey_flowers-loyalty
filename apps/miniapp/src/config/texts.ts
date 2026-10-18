@@ -112,3 +112,4 @@ export const T = (lang: Lang): Texts => (TEXTS[lang] ?? TEXTS.ru) as Texts;
 /** Подписи для экранов персонала (только русский). */
 export const GIFT_LABELS: Record<string, string> = { card: 'Открытка', delivery: 'Доставка', disc10: 'Скидка 10%', disc15: 'Скидка 15%', mini: 'Мини-букет' };
 export const REVERSE_REASONS = ['Ошибка в сумме', 'Не тот клиент', 'Возврат букета', 'Двойное начисление'];
+export const ADJUST_REASONS = ['Ошибка кассы', 'Компенсация', 'Акция', 'Возврат'];

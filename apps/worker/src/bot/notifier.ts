@@ -96,6 +96,9 @@ export function composeMessage(rules: LoyaltyRules, events: LoyaltyEvent[], lang
       case 'purchase_reversed':
         lines.push(T.reversed(e.reason));
         break;
+      case 'points_adjusted':
+        lines.push(T.adjusted(e.amount, e.balance, e.reason));
+        break;
       case 'points_redeemed':
         // Only worth mentioning alongside other news of the same purchase.
         if (events.some((x) => x.type !== 'points_redeemed' && x.type !== 'reward_used')) lines.push(T.redeemed(e.amount));

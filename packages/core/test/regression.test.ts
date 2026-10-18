@@ -302,6 +302,15 @@ describe('E13: manual adjustment settles overdue expiry first', () => {
   });
 });
 
+describe('manual adjustment notifies the client', () => {
+  it('emits points_adjusted with the signed amount, the new balance and the reason', () => {
+    const sim = new Sim();
+    sim.buy(1_000_000, d0);
+    const o = manualAdjust(sim.rules, sim.state, { idempotencyKey: 'm2', staffId: 's', amount: -4000, reason: '  Ошибка кассы ' }, plusDays(d0, 1));
+    expect(o.events).toEqual([{ type: 'points_adjusted', clientId: sim.state.clientId, amount: -4000, balance: 6000, reason: 'Ошибка кассы' }]);
+  });
+});
+
 describe('E15: staff warnings describe the actual cause', () => {
   it('negative balance warning only when points were really spent', () => {
     const sim = new Sim();

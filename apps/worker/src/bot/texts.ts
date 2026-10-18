@@ -54,6 +54,8 @@ const ru = {
   expired: (amount: number, days: number) => `🥀 Сгорело ${fmt(amount)} мёда: не было покупок ${days} ${plural(days, ['день', 'дня', 'дней'])}.`,
   cardReset: 'Медовые соты начаты заново.',
   reversed: (reason: string) => `↩️ Покупка отменена: ${reason}. Мёд и соты пересчитаны.`,
+  adjusted: (amount: number, balance: number, reason: string) =>
+    `${amount > 0 ? '🍯 Начислено' : 'Списано'} ${fmt(Math.abs(amount))} мёда: ${reason}. Баланс: ${fmt(balance)} мёда.`,
 };
 
 const uz: typeof ru = {
@@ -87,6 +89,8 @@ const uz: typeof ru = {
   expired: (amount, days) => `🥀 ${fmt(amount)} asal kuydi: ${days} kun davomida xarid bo‘lmadi.`,
   cardReset: 'Asal kataklari qaytadan boshlandi.',
   reversed: (reason) => `↩️ Xarid bekor qilindi: ${reason}. Asal va kataklar qayta hisoblandi.`,
+  adjusted: (amount, balance, reason) =>
+    `${amount > 0 ? '🍯 Qo‘shildi' : 'Yechildi'} ${fmt(Math.abs(amount))} asal: ${reason}. Balans: ${fmt(balance)} asal.`,
 };
 
 export const TEXTS: Record<BotLang, typeof ru> = { ru, uz };

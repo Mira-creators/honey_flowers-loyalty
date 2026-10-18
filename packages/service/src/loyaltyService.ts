@@ -128,7 +128,7 @@ export class LoyaltyService {
       const { outcome, extra } = 'outcome' in res ? res : { outcome: res, extra: undefined as T };
       if (hasEffects(outcome)) {
         try {
-          await this.repo.saveOutcome(clientId, outcome, version);
+          await this.repo.saveOutcome(clientId, outcome, version, { rules: rv.rules, state: applyOutcome(state, outcome), now });
         } catch (e) {
           if (e instanceof ConcurrencyError) {
             lastError = e;

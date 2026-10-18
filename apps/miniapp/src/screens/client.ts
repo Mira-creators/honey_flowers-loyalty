@@ -1,7 +1,7 @@
 /** Client screens: onboarding, honeycomb home, QR card, gifts, profile. */
 import type { ClientSummaryDTO, LevelInfo, HistoryItemDTO, GiftDTO } from '@honey/contracts';
 import { S, actions, app } from '../state';
-import { T } from '../config/texts';
+import { T, type Texts } from '../config/texts';
 import { THEMES } from '../config/themes';
 import { api, ApiErr } from '../api';
 import { tg } from '../tg';
@@ -66,8 +66,9 @@ function giftsView(c: ClientSummaryDTO) {
   return `<h2 class="h disp">${t.gifts}</h2><div class="list">${rows || `<p class="mut" style="margin:0 0 4px">${t.noGifts}</p>`}${locked}</div>`;
 }
 
-function histRow(h: HistoryItemDTO) {
-  const t = L();
+/** One history line. `t` = text table (the owner's client card passes Russian). */
+export function histRow(h: HistoryItemDTO, t: Texts = L()) {
+  const dstr = (iso: string) => { const d = new Date(iso); return t.date(d.getDate(), t.months[d.getMonth()]); };
   let title: string, sub: string;
   if (h.kind === 'purchase') {
     title = t.hPurchase(fmt(h.purchaseAmount ?? 0));
@@ -81,7 +82,7 @@ function profileView(c: ClientSummaryDTO) {
   const t = L();
   return `<div class="prof"><div class="ava">${esc(c.name.slice(0, 1).toUpperCase())}</div><div><div class="disp" style="font-size:18px">${esc(c.name)}</div><div class="mut">${esc(c.phoneMasked)} · ${esc(lvName(c.level))}</div></div></div>
     <div class="sub">${t.lang}</div><div class="langs"><button data-act="lang" data-l="ru" aria-pressed="${S.lang === 'ru'}">Русский</button><button data-act="lang" data-l="uz" aria-pressed="${S.lang === 'uz'}">O'zbekcha</button></div>
-    <div class="sub">${t.history}</div><div class="list">${c.history.length ? c.history.map(histRow).join('') : `<p class="mut">${t.noHistory}</p>`}</div>`;
+    <div class="sub">${t.history}</div><div class="list">${c.history.length ? c.history.map(h => histRow(h)).join('') : `<p class="mut">${t.noHistory}</p>`}</div>`;
 }
 
 function onboarding() {

@@ -189,6 +189,88 @@ export interface StaffDTO { id: string; telegramId: number | null; name: string;
 
 /** GET /api/owner/operations?limit=100 -> OperationDTO[] */
 
+/* ---------------- owner: client base ---------------- */
+
+/** Status filter of the client list (all windows are counted from the server "now"). */
+export type ClientStatus =
+  | 'active'     // a purchase within the last 90 days
+  | 'sleeping'   // last purchase 60–90 days ago (a subset of active: worth a nudge)
+  | 'lost'       // no purchase for more than 90 days, or never
+  | 'expiring'   // balance > 0 and it burns within 7 days
+  | 'birthday';  // birthday within the next 7 days (clients that told the bot their birthday)
+export type ClientSort = 'last_purchase_desc' | 'spent_desc' | 'balance_desc' | 'name' | 'created_desc';
+
+/**
+ * GET /api/owner/clients?q=&level=&status=&sort=&cursor=&limit=  → ClientListDTO
+ *   q       free text: client code ("HF4821"), phone digits (4+), or part of the name
+ *   level   LevelInfo.id
+ *   status  ClientStatus
+ *   sort    ClientSort (default last_purchase_desc)
+ *   cursor  opaque, from the previous page's nextCursor (keyset pagination: stable while scrolling)
+ *   limit   1..100, default 30
+ * Rows come from the client_stats summary table (maintained in the same transaction as every
+ * engine write), so a page costs O(limit) rows regardless of the size of the base.
+ */
+export interface ClientRowDTO {
+  id: string;
+  name: string;
+  phoneMasked: string;
+  code: string;
+  levelId: string;
+  levelName: string;
+  balance: number;
+  spent: number;                // level metric (sum counted toward the level)
+  purchases: number;            // active (not reversed) purchases
+  lastPurchaseAt: string | null;
+  expiresOn: string | null;     // last day the balance is valid, 'YYYY-MM-DD' Tashkent; null if balance <= 0
+  giftsAvailable: number;
+  registeredAt: string;
+}
+export interface ClientListDTO {
+  items: ClientRowDTO[];
+  nextCursor: string | null;    // null = last page
+}
+
+/**
+ * GET /api/owner/clients/:id → OwnerClientDTO: the client card as the client sees it
+ * (ClientSummaryDTO, full history) plus what only staff may see.
+ */
+export interface OwnerClientDTO extends ClientSummaryDTO {
+  phone: string | null;         // unmasked, E.164
+  telegramId: number;
+  registeredAt: string;
+  language: Lang;
+  birthday: string | null;      // 'YYYY-MM-DD'
+  note: string | null;          // free text written by the owner / staff (<= 500 chars)
+}
+
+/**
+ * POST /api/owner/clients/:id/adjust { points, reason } → AdjustResultDTO
+ * Manual correction of the balance (signed integer, |points| <= rules.maxPurchaseAmount),
+ * recorded in the ledger as manual_adjust with the acting staff id; the client gets a bot message.
+ * `idempotencyKey` is optional: repeating a request with the same key does not adjust twice.
+ */
+export interface AdjustRequest { points: number; reason: string; idempotencyKey?: string }
+export interface AdjustResultDTO { client: OwnerClientDTO; replayed: boolean; warnings: string[] }
+
+/** PUT /api/owner/clients/:id/note { note } → { note }  (empty string clears the note) */
+export interface NoteRequest { note: string }
+export interface NoteDTO { note: string | null }
+
+/**
+ * CSV export (owner only). The response is a streamed text/csv file: UTF-8 with BOM,
+ * ';' separator (Excel in ru/uz locales), dates as 'YYYY-MM-DD HH:MM' Tashkent,
+ * Content-Disposition: attachment.
+ *   GET /api/owner/export/clients.csv
+ *   GET /api/owner/export/operations.csv?from=YYYY-MM-DD&to=YYYY-MM-DD   (default: last 90 days; at most 50 000 rows → 400 otherwise)
+ * Both also accept `?token=` from POST /api/owner/export/link instead of the auth header, so the
+ * file can be opened in a normal browser (Telegram's WebView cannot download). A token works once
+ * and expires after 10 minutes.
+ */
+export type ExportKind = 'clients' | 'operations';
+export interface ExportLinkRequest { kind: ExportKind; from?: string; to?: string } // dates 'YYYY-MM-DD' (operations only)
+export interface ExportLinkDTO { url: string; expiresAt: string }
+
 /* ---------------- TEST_MODE only (404 otherwise) ---------------- */
 /** POST /api/test/role { role } — switch the caller's own effective role */
 export interface TestRoleRequest { role: Role }

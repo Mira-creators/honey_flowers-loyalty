@@ -33,6 +33,8 @@ export type LoyaltyEvent =
   | { type: 'expiry_warning'; clientId: string; daysLeft: number; balance: Uzs; expiresOn: string }
   | { type: 'points_expired'; clientId: string; amount: Uzs }
   | { type: 'card_reset'; clientId: string }
-  | { type: 'purchase_reversed'; clientId: string; purchaseId: string; reason: string };
+  | { type: 'purchase_reversed'; clientId: string; purchaseId: string; reason: string }
+  /** Manual correction of the balance by the owner (manualAdjust): signed amount and the reason given. */
+  | { type: 'points_adjusted'; clientId: string; amount: Uzs; balance: Uzs; reason: string };
 
 export type LoyaltyEventType = LoyaltyEvent['type'];

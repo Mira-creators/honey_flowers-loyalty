@@ -51,6 +51,18 @@ export interface NewClient {
   createdAt: Date;
 }
 
+/**
+ * What the state looks like AFTER an outcome is applied, handed to `saveOutcome`
+ * so a repository can maintain denormalized per-client summaries (apps/worker:
+ * client_stats) in the same transaction as the facts. Optional for repositories
+ * that derive everything on read (in-memory).
+ */
+export interface SavedState {
+  rules: LoyaltyRules;
+  state: ClientState;
+  now: Date;
+}
+
 export interface VersionedState {
   state: ClientState;
   /** Monotonic per-client version of the stored facts (0 = nothing saved yet). */
@@ -84,8 +96,10 @@ export interface Repository {
    * Persist all facts of an outcome atomically, iff the stored version is
    * still `expectedVersion` (then it becomes expectedVersion + 1).
    * Throws ConcurrencyError otherwise; nothing is written in that case.
+   * `after` (state with the outcome applied, rules, now) lets the repository
+   * update per-client summary rows atomically with the facts.
    */
-  saveOutcome(clientId: string, outcome: Outcome, expectedVersion: number): Promise<void>;
+  saveOutcome(clientId: string, outcome: Outcome, expectedVersion: number, after?: SavedState): Promise<void>;
 
   findPurchaseById(purchaseId: string): Promise<PurchaseRecord | null>;
   /** idempotency_key is globally unique in the DB. */
