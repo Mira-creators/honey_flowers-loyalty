@@ -5,7 +5,7 @@ import { applyOutcome, emptyOutcome, mergeOutcomes, type Outcome } from '../outc
 import type { LoyaltyRules } from '../rules.js';
 import {
   activeCardMoves,
-  balanceFromLedger,
+  balanceOf,
   cardPosition,
   deriveLevel,
   purchasesToNextReward,
@@ -67,7 +67,7 @@ export function maxRedeemable(
   if (reward?.type === 'discount_pct' && !rules.allowDiscountWithPoints) return 0;
   if (reward && reward.status !== 'available') return 0;
   const discount = rewardEffect(reward, lines, amount).discount;
-  return Math.max(0, Math.min(balanceFromLedger(s.ledger), redeemCap(rules, amount, discount)));
+  return Math.max(0, Math.min(balanceOf(s), redeemCap(rules, amount, discount)));
 }
 
 function sameRequest(p: PurchaseRecord, input: PurchaseInput, amount: Uzs): boolean {
@@ -119,7 +119,7 @@ export function applyPurchase(rules: LoyaltyRules, state: ClientState, input: Pu
   }
   const effect = rewardEffect(reward, input.lines, amount);
   const discount = effect.discount;
-  const balanceBefore = balanceFromLedger(s.ledger);
+  const balanceBefore = balanceOf(s);
   if (redeem > 0) {
     assert(redeem <= balanceBefore, 'INSUFFICIENT_BALANCE', `balance ${balanceBefore} < ${redeem}`);
     const cap = redeemCap(rules, amount, discount);
@@ -267,7 +267,7 @@ export function applyPurchase(rules: LoyaltyRules, state: ClientState, input: Pu
     cycle,
     cell,
     rewardsUnlocked: unlocked.map((r) => r.id),
-    balanceAfter: balanceFromLedger(after.ledger),
+    balanceAfter: balanceOf(after),
   };
   out.events = events;
   return mergeOutcomes(expiry, out);

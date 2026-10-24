@@ -3,14 +3,16 @@ import type { EditableRulesDTO, StaffDTO } from '@honey/contracts';
 import { S, actions, changes, inputs, app } from '../state';
 import { GIFT_LABELS } from '../config/texts';
 import { api, ApiErr } from '../api';
-import { esc, fmt, toast } from '../ui/dom';
+import { esc, fmt, toast, sheet, closeLayer } from '../ui/dom';
+import { tg } from '../tg';
 import { opRow } from './staff';
 import { clientsView, loadClients } from './clients';
+import { myCardHead } from './myCard';
 
 export function ownerView(): string {
   const o = S.owner;
   const body = o.tab === 'stats' ? statsView() : o.tab === 'clients' ? clientsView() : o.tab === 'rules' ? rulesView() : o.tab === 'staff' ? teamView() : opsView();
-  return `<main class="scr" id="scr">${body}</main>`;
+  return `<main class="scr" id="scr">${myCardHead()}${body}</main>`;
 }
 
 export async function loadOwnerTab() {
@@ -35,7 +37,7 @@ function statsView() {
     const h = w.purchases / max * (H - 30), x = i * (bw + gap), d = new Date(w.weekStart);
     return `<rect x="${x}" y="${H - 16 - h}" width="${bw}" height="${Math.max(h, 1)}" rx="5" fill="${i === n - 1 ? 'var(--c-accent)' : 'var(--c-line)'}"/><text x="${x + bw / 2}" y="${H - 20 - h}" text-anchor="middle" font-size="9.5" fill="var(--c-muted)">${w.purchases}</text><text x="${x + bw / 2}" y="${H - 3}" text-anchor="middle" font-size="8.5" fill="var(--c-muted)">${d.getDate()}.${String(d.getMonth() + 1).padStart(2, '0')}</text>`;
   }).join('');
-  return `<h2 class="h disp">Статистика</h2>${errBox()}
+  return `<h2 class="h disp">Статистика</h2>${errBox()}${consoleCard()}
     <div class="kpis">
       <div class="kpi"><div class="v">${fmt(s.clients)}</div><div class="k">участников · +${s.clientsNew7d} за 7 дней</div></div>
       <div class="kpi"><div class="v">${Math.round(s.repeatRate90d * 100)}%</div><div class="k">вернулись за 90 дней</div></div>
@@ -65,7 +67,7 @@ function rulesView() {
     <div class="fields">${num('minPurchaseForCell', 'Мин. сумма покупки для ячейки, сум', d.minPurchaseForCell, 10000)}${num('maxCellsPerDay', 'Ячеек в день на клиента', d.maxCellsPerDay, 1, 'защита от дробления чека')}</div>
     <div class="cells-ed">${cells}</div>
     <div class="sub">Мёд</div>
-    <div class="fields">${num('maxRedeemPct', 'Оплата мёдом, до % заказа', d.maxRedeemPct)}${num('expiryDays', 'Сгорает без покупок через, дней', d.expiryDays)}<div class="f"><label for="warn">Напоминать за, дней<small>через запятую</small></label><input id="warn" data-input="rule" data-key="warn" value="${d.expiryWarnDays.join(', ')}"></div>${num('welcomeBonus', 'Приветственный бонус, мёда', d.welcomeBonus, 1000)}</div>
+    <div class="fields">${num('maxRedeemPct', 'Оплата мёдом, до % заказа', d.maxRedeemPct)}${num('expiryDays', 'Сгорает без покупок через, дней', d.expiryDays)}<div class="f"><label for="warn">Напоминать за, дней<small>через запятую</small></label><input id="warn" data-input="rule" data-key="warn" value="${d.expiryWarnDays.join(', ')}"></div>${num('welcomeBonus', 'Приветственный бонус, мёда', d.welcomeBonus, 1000)}${num('reversalWindowHours', 'Флорист может отменить покупку в течение, часов', d.reversalWindowHours ?? 24, 1, 'от 1 до 720; и только пока мёд и подарок за неё не потрачены')}</div>
     <div class="sticky-save"><button class="b acc full big" data-act="saveRules" ${!dirty || S.owner.busy ? 'disabled' : ''}>${S.owner.busy ? 'Сохраняем…' : dirty ? 'Сохранить правила' : 'Изменений нет'}</button>${dirty ? '<button class="link" data-act="discardRules">Сбросить изменения</button>' : ''}</div>`;
 }
 
@@ -99,6 +101,7 @@ function applyRuleField(d: EditableRulesDTO, el: HTMLInputElement | HTMLSelectEl
   else if (k === 'lvfrom') d.levels[+el.dataset.i!].from = n;
   else if (k === 'gift') { const c = el.dataset.cell!; if (v) d.gifts[c] = v; else delete d.gifts[c]; }
   else if (k === 'warn') d.expiryWarnDays = v.split(/[,\s]+/).map(x => Math.round(+x)).filter(x => x > 0).sort((a, b) => b - a);
+  else if (k === 'reversalWindowHours') d.reversalWindowHours = Math.min(720, Math.max(1, n));
   else (d as unknown as Record<string, number>)[k] = n;
 }
 /** Update only the save bar while the owner types, so the focused input is not rebuilt. */
@@ -138,4 +141,32 @@ actions.addStaff = async () => {
 actions.removeStaff = async el => {
   try { await api.removeStaff(el.dataset.id!); S.owner.staffList = await api.staff(); app.render(); toast('Сотрудник убран', 'ok'); }
   catch (e) { toast((e as ApiErr).message, 'error'); }
+};
+
+/* ---------------- owner web console ("Кабинет владельца" on a computer) ---------------- */
+/** Deep analytics live on a separate page: a one-time link (10 min) logs the owner in there. */
+function consoleCard() {
+  return `<div class="note-box" style="display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-bottom:12px">
+    <span style="flex:1;min-width:180px">Подробная аналитика, выгрузки и импорт базы — в кабинете на компьютере.</span>
+    <button class="b acc" data-act="openConsole">Открыть кабинет на компьютере</button></div>`;
+}
+actions.openConsole = async () => {
+  try {
+    const link = await api.webLink();
+    const until = new Date(link.expiresAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+    sheet(`<h4>Кабинет владельца</h4>
+      <p>${link.sentToChat ? 'Ссылка отправлена вам в чат с ботом: откройте её на компьютере в Telegram Desktop.' : 'Откройте эту ссылку на компьютере.'}
+      Она действует до ${esc(until)} и открывается один раз. Никому её не пересылайте.</p>
+      <input id="consoleUrl" readonly value="${esc(link.url)}" style="width:100%;font-size:12px" aria-label="Ссылка на кабинет">
+      <div class="grid2"><button class="b" data-act="copyConsole">Скопировать</button><button class="b acc" data-act="goConsole">Открыть здесь</button></div>`);
+  } catch (e) { toast((e as ApiErr).message, 'error'); }
+};
+actions.copyConsole = async () => {
+  const el = document.getElementById('consoleUrl') as HTMLInputElement | null; if (!el) return;
+  try { await navigator.clipboard.writeText(el.value); toast('Ссылка скопирована', 'ok'); }
+  catch { el.select(); toast('Выделите ссылку и скопируйте её', 'info'); }
+};
+actions.goConsole = () => {
+  const el = document.getElementById('consoleUrl') as HTMLInputElement | null;
+  if (el) { tg.openLink(el.value); closeLayer(); }
 };

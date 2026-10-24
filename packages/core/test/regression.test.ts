@@ -22,6 +22,14 @@ import { at, flowers, makeRules, plusDays, Sim } from './helpers.js';
 
 const d0 = at('2026-11-01 12:00');
 
+/**
+ * Item 8 (owner decision): a purchase may be reversed only within rules.reversalWindowHours and
+ * only while its мёд and gift are unused. The E1/E2/E5 tests below check the reversal MECHANICS
+ * (expiry interplay, card cascade) on histories that are older than the window: they run with the
+ * window switched off (bypassing the schema's 720 h cap), as for a legacy state.
+ */
+const noWindow = (r = makeRules()) => ({ ...r, reversalWindowHours: Number.MAX_SAFE_INTEGER });
+
 function code(fn: () => unknown): string | undefined {
   try {
     fn();
@@ -34,7 +42,7 @@ function code(fn: () => unknown): string | undefined {
 
 describe('E1: reversal and expiry', () => {
   it('points refunded by a reversal after an expiry still expire (anchor moved back → overdue)', () => {
-    const sim = new Sim();
+    const sim = new Sim(noWindow());
     sim.buy(1_000_000, d0); // p1: +10 000
     sim.buy(100_000, plusDays(d0, 10), { redeemPoints: 5_000 }); // p2: −5 000, +950
     sim.expiry(plusDays(d0, 100)); // burns 5 950
@@ -48,7 +56,7 @@ describe('E1: reversal and expiry', () => {
   });
 
   it('a purchase after the refund settles the overdue refund first', () => {
-    const sim = new Sim();
+    const sim = new Sim(noWindow());
     sim.buy(1_000_000, d0);
     sim.buy(100_000, plusDays(d0, 10), { redeemPoints: 5_000 });
     sim.expiry(plusDays(d0, 100));
@@ -59,7 +67,7 @@ describe('E1: reversal and expiry', () => {
   });
 
   it('reversing a purchase whose cashback already expired does not debit it again', () => {
-    const sim = new Sim();
+    const sim = new Sim(noWindow());
     sim.buy(1_000_000, d0); // +10 000
     sim.expiry(plusDays(d0, 90)); // −10 000
     const o = sim.reverse('p1', plusDays(d0, 91));
@@ -70,7 +78,7 @@ describe('E1: reversal and expiry', () => {
   });
 
   it('reversal after expiry still refunds redeemed points (they were paid with real value)', () => {
-    const sim = new Sim();
+    const sim = new Sim(noWindow());
     sim.buy(1_000_000, d0); // +10 000
     sim.buy(200_000, plusDays(d0, 1), { redeemPoints: 10_000 }); // −10 000, +1 900
     sim.expiry(plusDays(d0, 91)); // −1 900
@@ -81,22 +89,21 @@ describe('E1: reversal and expiry', () => {
 });
 
 describe('E2: a gift cannot come back through a reversal', () => {
-  it('reversing the purchase that used a gift does not restore it if its unlocking purchase was reversed', () => {
-    const sim = new Sim();
+  it('item 8: the purchase whose gift was already used cannot be reversed (no "gift earned twice")', () => {
+    const sim = new Sim(noWindow());
     for (let i = 0; i < 3; i++) sim.buy(150_000, plusDays(d0, i)); // p3 → cell 3 gift
     const g = sim.gifts('available')[0]!;
     sim.buy(50_000, plusDays(d0, 3), { useRewardId: g.id }); // p4 uses it
-    sim.reverse('p3', plusDays(d0, 3)); // gift kept as used (warning)
-    expect(sim.card.filled).toBe(2);
-    const o = sim.reverse('p4', plusDays(d0, 3));
-    expect(sim.state.rewards.find((r) => r.id === g.id)?.status).toBe('revoked');
-    expect(o.warnings.join('\n')).toMatch(/not returned/);
-    sim.buy(150_000, plusDays(d0, 4)); // reaches cell 3 again → ONE fresh gift
-    expect(sim.gifts('available').filter((r) => r.type === 'free_card')).toHaveLength(1);
+    expect(code(() => sim.reverse('p3', plusDays(d0, 3)))).toBe('REVERSAL_GIFT_USED');
+    expect(sim.card.filled).toBe(3);
+    expect(sim.state.rewards.find((r) => r.id === g.id)?.status).toBe('used');
+    // reversing the purchase that USED the gift is fine and returns it
+    sim.reverse('p4', plusDays(d0, 3));
+    expect(sim.state.rewards.find((r) => r.id === g.id)?.status).toBe('available');
   });
 
   it('a gift used in a purchase does not come back after reset_all burned the card', () => {
-    const sim = new Sim(makeRules({ expiry: { onExpiry: 'reset_all' } }));
+    const sim = new Sim(noWindow(makeRules({ expiry: { onExpiry: 'reset_all' } })));
     for (let i = 0; i < 3; i++) sim.buy(150_000, plusDays(d0, i));
     const g = sim.gifts('available')[0]!;
     sim.buy(50_000, plusDays(d0, 3), { useRewardId: g.id }); // p4
@@ -166,7 +173,7 @@ describe('E5: rolling back the latest step cascades over steps of already revers
       ['p2', 'p1'],
       ['p1', 'p2'],
     ]) {
-      const sim = new Sim();
+      const sim = new Sim(noWindow());
       sim.buy(150_000, d0);
       sim.buy(150_000, plusDays(d0, 1));
       for (const id of order) sim.reverse(id, plusDays(d0, 2));
@@ -175,7 +182,7 @@ describe('E5: rolling back the latest step cascades over steps of already revers
   });
 
   it('at the card boundary: reverse the 10th purchase then the 11th → 9 filled on card 1, next purchase unlocks the cell-10 gift', () => {
-    const sim = new Sim();
+    const sim = new Sim(noWindow());
     for (let i = 0; i < 10; i++) sim.buy(150_000, plusDays(d0, i));
     sim.buy(150_000, plusDays(d0, 10)); // p11: card 2
     sim.reverse('p10', plusDays(d0, 10));
@@ -187,7 +194,7 @@ describe('E5: rolling back the latest step cascades over steps of already revers
   });
 
   it('a reversed non-latest purchase does not consume a daily card slot', () => {
-    const sim = new Sim(makeRules({ honeycomb: { maxCellsPerDay: 2 } }));
+    const sim = new Sim(noWindow(makeRules({ honeycomb: { maxCellsPerDay: 2 } })));
     sim.buy(150_000, at('2026-11-01 10:00'));
     sim.buy(150_000, at('2026-11-01 11:00'));
     sim.reverse('p1', at('2026-11-01 11:30')); // step kept (not latest), but no longer a daily slot
@@ -197,7 +204,7 @@ describe('E5: rolling back the latest step cascades over steps of already revers
   });
 
   it('three purchases, reverse the middle one then the last: card ends at 1 (cascade stops at an active purchase)', () => {
-    const sim = new Sim();
+    const sim = new Sim(noWindow());
     for (let i = 0; i < 3; i++) sim.buy(150_000, plusDays(d0, i));
     sim.reverse('p2', plusDays(d0, 3));
     expect(sim.card.filled).toBe(3);
@@ -206,7 +213,7 @@ describe('E5: rolling back the latest step cascades over steps of already revers
   });
 
   it('reversing a purchase made before a reset_all warns about the reset, not about later purchases', () => {
-    const sim = new Sim(makeRules({ expiry: { onExpiry: 'reset_all' } }));
+    const sim = new Sim(noWindow(makeRules({ expiry: { onExpiry: 'reset_all' } })));
     sim.buy(150_000, d0);
     sim.expiry(plusDays(d0, 90));
     const o = sim.reverse('p1', plusDays(d0, 91));
@@ -311,13 +318,30 @@ describe('manual adjustment notifies the client', () => {
   });
 });
 
-describe('E15: staff warnings describe the actual cause', () => {
-  it('negative balance warning only when points were really spent', () => {
+describe('item 8: a reversal never creates a contradictory state', () => {
+  it('refused when the purchase\'s мёд was already spent (balance would go negative); state unchanged', () => {
     const sim = new Sim();
-    sim.seedPoints(10_000, d0);
-    sim.buy(100_000, plusDays(d0, 1), { redeemPoints: 10_000 });
-    const o = sim.reverse('p1', plusDays(d0, 2));
-    expect(o.warnings.join('\n')).toMatch(/negative/);
+    sim.seedPoints(10_000, d0); // p1: +10 000
+    sim.buy(100_000, at('2026-11-01 15:00'), { redeemPoints: 10_000 }); // p2 spends it
+    const before = JSON.stringify(sim.state);
+    expect(code(() => sim.reverse('p1', at('2026-11-01 16:00')))).toBe('REVERSAL_POINTS_SPENT');
+    expect(JSON.stringify(sim.state)).toBe(before);
+    // reversing the redemption itself (it returns мёд) is allowed
+    sim.reverse('p2', at('2026-11-01 16:00'));
+    expect(sim.balance).toBe(10_000);
+  });
+
+  it('refused after reversalWindowHours (default 24 h), allowed within; the window is a rule', () => {
+    const sim = new Sim();
+    sim.buy(150_000, d0);
+    expect(code(() => sim.reverse('p1', new Date(d0.getTime() + 24 * 3_600_000 + 60_000)))).toBe('REVERSAL_WINDOW_EXPIRED');
+    sim.reverse('p1', new Date(d0.getTime() + 24 * 3_600_000));
+    expect(sim.balance).toBe(0);
+    const s2 = new Sim(makeRules({ reversalWindowHours: 2 }));
+    s2.buy(150_000, d0);
+    expect(code(() => s2.reverse('p1', new Date(d0.getTime() + 3 * 3_600_000)))).toBe('REVERSAL_WINDOW_EXPIRED');
+    expect(() => makeRules({ reversalWindowHours: 0 })).toThrow();
+    expect(() => makeRules({ reversalWindowHours: 721 })).toThrow();
   });
 });
 

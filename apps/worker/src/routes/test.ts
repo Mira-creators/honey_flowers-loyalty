@@ -3,13 +3,16 @@ import { normalizePhone } from '@honey/service';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { Vars } from '../auth.js';
-import { runDailyJob } from '../cron.js';
+import { createContext } from '../context.js';
+import type { Env } from '../env.js';
+import { countingD1, SubrequestBudget } from '../lib/budget.js';
+import { runDailyJobMonitored } from '../lib/monitor.js';
 import { D1Repository } from '../db/d1Repository.js';
 import { HttpError } from '../lib/errors.js';
 import { buildMe } from '../lib/summary.js';
 
 /** TEST_MODE-only routes (the router answers 404 without TEST_MODE, see app.ts). */
-export const testRoutes = new Hono<{ Variables: Vars }>();
+export const testRoutes = new Hono<{ Bindings: Env; Variables: Vars }>();
 
 /** POST /api/test/role { role } — switch the caller's own effective role. → MeDTO */
 testRoutes.post('/role', async (c) => {
@@ -38,9 +41,15 @@ testRoutes.post('/clock', async (c) => {
   return c.json(await buildMe(fresh, c.get('caller')));
 });
 
-/** POST /api/test/run-expiry — runs the daily job now. */
+/**
+ * POST /api/test/run-expiry — runs the daily job now (one hourly run; the panel says if more are due).
+ * Messages are sent at any hour here. The request has the same 50-subrequest limit as the cron:
+ * the job gets a budget of 40 (auth already used a few).
+ */
 testRoutes.post('/run-expiry', async (c) => {
-  const res = await runDailyJob(c.get('app'));
+  const budget = new SubrequestBudget(40);
+  const app = await createContext({ ...c.env, DB: countingD1(c.env.DB, budget) }, { waitUntil: (p) => c.get('app').defer(p) });
+  const res = await runDailyJobMonitored(app, 'manual', { respectQuietHours: false, budget });
   return c.json({ expired: res.expired, warned: res.warned, checked: res.checked, more: res.more } satisfies TestRunExpiryDTO);
 });
 

@@ -8,4 +8,5 @@ export * from './notifier.js';
 export * from './loyaltyService.js';
 export * from './inMemoryRepository.js';
 export * from './phone.js';
+export * from './simulation.js';
 export * from './telegram/initData.js';

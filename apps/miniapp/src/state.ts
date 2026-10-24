@@ -19,6 +19,8 @@ export interface ClientsState {
   cardId: string | null;
   card: OwnerClientDTO | null;
   cardError: string | null;
+  /** «Показать ещё» of the card history is loading. */
+  historyLoading?: boolean;
   /** Unsaved text of the note field (survives re-renders), null = show the saved note. */
   noteDraft: string | null;
   /** List scroll position, restored when the card is closed. */
@@ -53,6 +55,8 @@ export const S = {
   screen: 'home' as ClientScreen,
   animating: false,
   waitingContact: false,
+  /** Staff / owner looking at their OWN client card («Моя карта»), see screens/myCard.ts. */
+  myCard: false,
   staff: null as unknown as StaffState,
   owner: {
     tab: 'stats' as OwnerTab,

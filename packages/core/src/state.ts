@@ -11,8 +11,54 @@ export function balanceFromLedger(ledger: readonly LedgerEntry[]): Uzs {
   return ledger.reduce((sum, e) => sum + e.amount, 0);
 }
 
+/**
+ * Points balance of a client: the loaded ledger plus what a bounded state folded away
+ * (ClientState.folded). Use this, not balanceFromLedger(state.ledger), for a state.
+ */
+export function balanceOf(state: ClientState): Uzs {
+  return (state.folded?.ledgerSum ?? 0) + balanceFromLedger(state.ledger);
+}
+
+/** Loaded active purchases (a bounded state may hold only the latest ones, see activePurchaseCount). */
 export function activePurchases(state: ClientState): PurchaseRecord[] {
   return state.purchases.filter((p) => p.status === 'active');
+}
+
+/** All active purchases of the client, loaded or folded. */
+export function activePurchaseCount(state: ClientState): number {
+  return (state.folded?.activeCount ?? 0) + activePurchases(state).length;
+}
+
+/**
+ * What the folded (not loaded) active purchases add to the all-time level metric for the current
+ * override: their sums were computed for the override in force at load time; an override set
+ * later (expiry, at `now`, after every stored purchase) forgets them all.
+ */
+export function foldedLevel(state: ClientState): { sum: Uzs; count: number } {
+  const f = state.folded;
+  if (!f) return { sum: 0, count: 0 };
+  const at = state.levelOverride?.setAt.getTime() ?? null;
+  const since = f.levelSince?.getTime() ?? null;
+  if (at !== since && at !== null && (since === null || at > since)) return { sum: 0, count: 0 };
+  return { sum: f.levelSum, count: f.levelCount };
+}
+
+/**
+ * All-time level totals (no window, no "now"): active purchases at/after the override's setAt,
+ * loaded + folded. Stored per client (apps/worker client_stats.level_sum / level_count) so a
+ * bounded state can be loaded without reading every purchase.
+ */
+export function levelTotals(state: ClientState): { sum: Uzs; count: number } {
+  const since = state.levelOverride?.setAt.getTime() ?? null;
+  const f = foldedLevel(state);
+  let sum = f.sum;
+  let count = f.count;
+  for (const p of activePurchases(state)) {
+    if (since !== null && p.createdAt.getTime() < since) continue;
+    sum += p.amount;
+    count++;
+  }
+  return { sum, count };
 }
 
 // ---------------------------------------------------------------- levels
@@ -50,7 +96,10 @@ export function deriveLevel(rules: LoyaltyRules, state: ClientState, now: Date):
     if (windowStartKey && localDateKey(p.createdAt, tz) < windowStartKey) return false;
     return true;
   });
-  const metric = criterion === 'sum' ? counted.reduce((s, p) => s + p.amount, 0) : counted.length;
+  // Folded (not loaded) purchases count only for an all-time level: with a window, storage loads
+  // every active purchase inside the window (apps/worker D1Repository bounded load).
+  const folded = windowStartKey ? { sum: 0, count: 0 } : foldedLevel(state);
+  const metric = criterion === 'sum' ? folded.sum + counted.reduce((s, p) => s + p.amount, 0) : folded.count + counted.length;
 
   let index = 0;
   tiers.forEach((t, i) => {
@@ -171,4 +220,9 @@ export function expiryInfo(rules: LoyaltyRules, state: ClientState, now: Date): 
 
 export function availableRewards(state: ClientState): Reward[] {
   return state.rewards.filter((r) => r.status === 'available');
+}
+
+/** All available gifts of the client, loaded or folded (ClientState.folded.availableGifts). */
+export function availableGiftCount(state: ClientState): number {
+  return (state.folded?.availableGifts ?? 0) + availableRewards(state).length;
 }

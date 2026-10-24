@@ -61,7 +61,7 @@ function cardView(c: ClientSummaryDTO) {
 
 function giftsView(c: ClientSummaryDTO) {
   const t = L();
-  const rows = c.gifts.map((g: GiftDTO) => `<div class="it ${g.status !== 'available' ? 'dim' : ''}"><div class="ic">${giftSvg}</div><div><div class="t">${esc(giftText(g.type).t)}</div><div class="s">${g.status === 'available' ? t.giftAvail : g.status === 'used' ? t.giftUsed(g.usedAt ? dstr(g.usedAt) : '') : t.giftRevoked}</div></div><span class="mut">${g.status === 'available' ? '🎁' : g.status === 'used' ? '✓' : '—'}</span></div>`).join('');
+  const rows = c.gifts.map((g: GiftDTO) => `<div class="it ${g.status !== 'available' ? 'dim' : ''}"><div class="ic">${giftSvg}</div><div><div class="t">${esc(giftText(g.type).t)}</div><div class="s">${g.status === 'available' ? t.giftAvail : g.status === 'used' ? t.giftUsed(g.usedAt ? dstr(g.usedAt) : '') : t.giftRevoked}${g.reason ? ' · ' + esc(g.reason) : ''}</div></div><span class="mut">${g.status === 'available' ? '🎁' : g.status === 'used' ? '✓' : '—'}</span></div>`).join('');
   const locked = giftCells(c).filter(n => n > c.card.filled).map(() => `<div class="it lock"><div class="ic">?</div><div><div class="t">${t.surprise}</div><div class="s">${t.surpriseHint}</div></div><span></span></div>`).join('');
   return `<h2 class="h disp">${t.gifts}</h2><div class="list">${rows || `<p class="mut" style="margin:0 0 4px">${t.noGifts}</p>`}${locked}</div>`;
 }
@@ -136,8 +136,11 @@ export async function animateClientChange(prev: ClientSummaryDTO, next: ClientSu
   const lvlUp = next.level.id !== prev.level.id && next.level.from > prev.level.from;
   const sameCycle = next.card.cycle === prev.card.cycle;
   const lastPurchase = next.history.find(h => h.kind === 'purchase' && !prev.history.some(p => p.id === h.id));
+  // Bonus мёд granted by the owner (no purchase): honey drops into the balance + a toast.
+  const grantHoney = lastPurchase ? undefined : next.history.find(h => h.kind === 'manual' && h.points > 0 && !prev.history.some(p => p.id === h.id));
   if (!root || S.screen !== 'home') {
     if (newGifts.length || lvlUp || lastPurchase) toast(lastPurchase ? t.plusPoints(fmt(lastPurchase.cashback ?? Math.max(0, lastPurchase.points))) : t.newGift, 'ok');
+    else if (grantHoney) toast(t.grantHoney(fmt(grantHoney.points), grantHoney.reason ?? ''), 'ok');
     return;
   }
   S.animating = true;
@@ -164,6 +167,7 @@ export async function animateClientChange(prev: ClientSummaryDTO, next: ClientSu
       const ng = giftCells(next).find(n => n > next.card.filled);
       toast(t.accruedToast(fmt(lastPurchase.cashback ?? Math.max(0, lastPurchase.points)), ng ? ng - next.card.filled : 0, lastPurchase.redeemed ? fmt(lastPurchase.redeemed) : ''), 'ok');
     }
+    if (grantHoney) toast(t.grantHoney(fmt(grantHoney.points), grantHoney.reason ?? ''), 'ok');
     for (const g of newGifts) { await sleep(400); await giftModal(g); }
     if (lvlUp) {
       await sleep(400);
@@ -175,7 +179,7 @@ export async function animateClientChange(prev: ClientSummaryDTO, next: ClientSu
 
 function giftModal(g: GiftDTO) {
   const t = L(), gt = giftText(g.type); let opened = false;
-  return modal(`<div class="k">${t.mGiftK(g.cell)}</div><div class="flip" id="flip"><div class="flip-in"><div class="face front"><span class="q">?</span></div><div class="face back">${giftSvg}<b>${esc(gt.t)}</b></div></div></div><p>${esc(gt.p)}</p>`, t.mOpen, () => {
+  return modal(`<div class="k">${g.source === 'grant' ? t.mGrantK : t.mGiftK(g.cell)}</div><div class="flip" id="flip"><div class="flip-in"><div class="face front"><span class="q">?</span></div><div class="face back">${giftSvg}<b>${esc(gt.t)}</b></div></div></div><p>${esc(gt.p)}${g.reason ? `<br><b>${esc(g.reason)}</b>` : ''}</p>`, t.mOpen, () => {
     if (!opened) { opened = true; document.getElementById('flip')?.classList.add('on'); const b = document.getElementById('mBtn'); if (b) b.textContent = t.mTake; confetti(); tg.haptic('success'); return false; }
   });
 }

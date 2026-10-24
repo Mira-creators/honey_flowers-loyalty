@@ -13,6 +13,7 @@ import { staffView, loadRecent } from './screens/staff';
 import { ownerView, loadOwnerTab } from './screens/owner';
 import { closeClientCard } from './screens/clients';
 import { testButton } from './screens/testbar';
+import { myCardView } from './screens/myCard';
 
 const root = document.getElementById('app')!;
 // Older WebViews (iOS < 15.4) lack structuredClone; the rules editor uses it.
@@ -50,7 +51,8 @@ function render() {
   else if (S.fatal || !S.me) { html = S.loading ? `<main class="scr center-all"><div class="spinner" aria-label="Загрузка"></div></main>` : errorView(); key = 'err'; }
   else {
     const role = S.me.role;
-    if (role === 'client') { html = clientView(); key = 'c-' + (S.me.registered ? S.screen : 'onb'); }
+    if (S.myCard && role !== 'client') { html = myCardView(); key = 'my-' + (S.me.registered ? S.screen : 'onb'); }
+    else if (role === 'client') { html = clientView(); key = 'c-' + (S.me.registered ? S.screen : 'onb'); }
     else if (role === 'florist' || role === 'manager') { html = staffView(); key = 's-' + S.staff.step; }
     else { html = (S.owner.tab === 'desk' ? staffView() : ownerView()) + staffNav(role); key = 'o-' + S.owner.tab + (S.owner.tab === 'desk' ? S.staff.step : S.owner.tab === 'clients' && S.owner.cl.cardId ? '-card' : ''); }
   }
@@ -72,6 +74,7 @@ app.render = render;
 
 function setBack() {
   if (!S.me) return tg.backButton(null);
+  if (S.myCard && S.me.role !== 'client') return tg.backButton(() => { if (S.me?.registered && S.screen !== 'home') S.screen = 'home'; else S.myCard = false; render(); });
   if (S.me.role === 'client' && S.me.registered && S.screen !== 'home') return tg.backButton(() => { S.screen = 'home'; render(); });
   if (S.me.role === 'owner' && S.owner.tab === 'clients' && S.owner.cl.cardId) return tg.backButton(closeClientCard);
   if (S.me.role !== 'client' && (S.me.role === 'florist' || S.me.role === 'manager' || S.owner.tab === 'desk') && S.staff.step !== 'find') return tg.backButton(() => { resetStaff(); render(); loadRecent(); });
@@ -138,12 +141,13 @@ async function refresh(animate = true) {
   if (first) S.lang = me.client?.lang ?? ((navigator.language || '').startsWith('uz') ? 'uz' : 'ru');
   else if (me.client && prev?.client && me.client.lang !== prev.client.lang) S.lang = me.client.lang;
   if (first || prev?.role !== me.role) {
+    if (me.role === 'client') S.myCard = false;
     if (me.role === 'owner' && S.owner.tab === 'desk' && first) S.owner.tab = 'stats';
     if (me.role === 'florist' || me.role === 'manager' || (me.role === 'owner' && S.owner.tab === 'desk')) loadRecent();
     if (me.role === 'owner' && S.owner.tab !== 'desk') loadOwnerTab();
     return render();
   }
-  if (me.role === 'client' && prev?.client && me.client && prev.registered && me.registered) {
+  if ((me.role === 'client' || S.myCard) && prev?.client && me.client && prev.registered && me.registered) {
     if (!changed(prev.client, me.client) && prev.clockOffsetDays === me.clockOffsetDays) return;
     if (animate && !S.animating) { await animateClientChange(prev.client, me.client); }
   }
@@ -178,7 +182,7 @@ document.addEventListener('keydown', e => {
 setInterval(() => {
   if (document.visibilityState !== 'visible' || S.animating || !S.me) return;
   if (document.getElementById('layer')?.children.length) return;
-  if (S.me.role === 'client' && S.me.registered) refresh();
+  if ((S.me.role === 'client' || S.myCard) && S.me.registered) refresh();
 }, 4000);
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && S.me) refresh(); });
 

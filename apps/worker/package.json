@@ -9,8 +9,8 @@
     "build": "node ../../scripts/build.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "bundle": "npm run ensure-assets && wrangler deploy --dry-run --outdir .wrangler/dry-run",
-    "db:migrate:local": "wrangler d1 migrations apply honey-loyalty --local",
-    "db:migrate:remote": "wrangler d1 migrations apply honey-loyalty --remote",
+    "db:migrate:local": "wrangler d1 migrations apply DB --local",
+    "db:migrate:remote": "wrangler d1 migrations apply DB --remote",
     "dev": "npm run ensure-assets && npm run db:migrate:local && wrangler dev --local",
     "deploy": "npm run ensure-assets && wrangler deploy",
     "test": "vitest run"

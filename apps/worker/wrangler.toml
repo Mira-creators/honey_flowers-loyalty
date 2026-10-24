@@ -13,6 +13,7 @@ keep_vars = true
 [alias]
 "@honey/core" = "../../packages/core/src/index.ts"
 "@honey/service" = "../../packages/service/src/index.ts"
+"@honey/contracts" = "../../packages/contracts/src/index.ts"
 
 [observability]
 enabled = true
@@ -37,15 +38,34 @@ database_name = "honey-loyalty"
 database_id = "eda1f266-41a7-4db4-bd94-f3391d7db9b1"
 migrations_dir = "migrations"
 
-# Daily job at 04:00 UTC = 09:00 Asia/Tashkent: points expiry + reminders.
+# The daily job runs EVERY HOUR (Workers Free: ≤ 45 subrequests per run, so the work is spread over
+# the day): expiries / reminders are applied at any hour, messages are sent 09:00–21:00 Tashkent
+# (04:00–16:00 UTC) from the outbox. See src/cron.ts.
 [triggers]
-crons = ["0 4 * * *"]
+crons = ["0 * * * *"]
 
 [vars]
 # "1" = test version (X-Test-User header, role switching, test clock, /api/test/*). "0" for production.
+# A value in this file overwrites the dashboard on every deploy: change it here or as a BUILD
+# variable TEST_MODE (scripts/select-env.mjs copies it in) — docs/DEPLOY.md, «Тестовый режим».
 TEST_MODE = "1"
+# Who may use the test features while TEST_MODE = "1": comma-separated Telegram ids and/or phones
+# (+998…). Set → only they (everyone else sees the production app). Empty → everyone on the dev
+# polygon, NOBODY on the client worker (fail closed). Usually set as a BUILD variable TEST_USERS.
+TEST_USERS = ""
+# Which deployment this is: "client" (branch main), "dev" (branch dev) or "local"; set by scripts/select-env.mjs.
+DEPLOY_ENV = "local"
 # Bot username without "@"; may stay empty: GET /setup fills it from Telegram.
 BOT_USERNAME = ""
+# Monitoring (docs/DEPLOY.md, «Мониторинг и оповещения»): Telegram chat ids that get alerts about
+# server errors, bot errors and nightly job failures, comma-separated (each person presses /start in
+# the bot once). Empty = alerts off. A value in this file overwrites the dashboard on every deploy:
+# set it here, or as a BUILD variable ALERT_CHAT_ID (scripts/select-env.mjs copies it in).
+ALERT_CHAT_ID = ""
+# "1" = after every nightly run also send a short «Ночная задача: ок …» message.
+ALERT_DAILY = "0"
+# Shown in alerts and GET /health; scripts/select-env.mjs sets it to "<worker> (<branch>)" on build.
+ENV_NAME = "honey-loyalty (local)"
 
 # Secrets — NEVER commit them. Dashboard → Worker → Settings → Variables and Secrets (type "Secret"),
 # or `npx wrangler secret put <NAME>`. For local dev put them into apps/worker/.dev.vars.
@@ -54,6 +74,9 @@ BOT_USERNAME = ""
 #   SETUP_KEY       random string that protects GET /setup?key=...
 #   TEST_KEY        (TEST_MODE only) random string the browser test login sends as X-Test-Key;
 #                   without it the X-Test-User header is rejected, so strangers cannot act as testers
+#   WEB_SESSION_SECRET (optional) HMAC key of the owner console's browser sessions (console.html);
+#                   unset = derived from BOT_TOKEN. Changing it logs every browser out.
 # Optional plain variables:
 #   PUBLIC_URL        https://honey-loyalty.<subdomain>.workers.dev (otherwise taken from the /setup request)
-#   CRON_MAX_CLIENTS  clients the daily job processes per run (default 40; the rest wait for the next day)
+#   CRON_MAX_CLIENTS  clients the hourly job processes per run (default 100; the rest wait for the next hour)
+#   CRON_MAX_SENDS    Telegram messages the hourly job sends per run (default 25)

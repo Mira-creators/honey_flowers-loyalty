@@ -111,7 +111,7 @@ describe('staff routes', () => {
     expect(ok.json().balance).toBe(25_000);
   });
 
-  it('reverse requires a reason and returns warnings for a used gift', async () => {
+  it('reverse requires a reason; refused (409) while the gift of the purchase is used', async () => {
     ctx = setup();
     const clientId = await ctx.registerClient();
     const ids: string[] = [];
@@ -123,7 +123,7 @@ describe('staff routes', () => {
     const me = await ctx.app.inject({ method: 'GET', url: '/me', headers: await ctx.tma(CLIENT_TG) });
     const gift = me.json().gifts[0];
     expect(gift).toMatchObject({ type: 'free_card', status: 'available' });
-    await ctx.app.inject({
+    const p4 = await ctx.app.inject({
       method: 'POST',
       url: '/staff/purchases',
       headers: await ctx.tma(FLORIST_TG),
@@ -132,10 +132,17 @@ describe('staff routes', () => {
 
     const noReason = await ctx.app.inject({ method: 'POST', url: `/staff/purchases/${ids[2]}/reverse`, headers: await ctx.tma(OWNER_TG), payload: {} });
     expect(noReason.statusCode).toBe(400);
-    const rev = await ctx.app.inject({ method: 'POST', url: `/staff/purchases/${ids[2]}/reverse`, headers: await ctx.tma(OWNER_TG), payload: { reason: 'клиент вернул букет' } });
+    const reverse = async (id: string) => ctx.app.inject({ method: 'POST', url: `/staff/purchases/${id}/reverse`, headers: await ctx.tma(OWNER_TG), payload: { reason: 'клиент вернул букет' } });
+    const refused = await reverse(ids[2]!);
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json().error).toBe('REVERSAL_GIFT_USED');
+    // reversing the purchase that used the gift returns it; then the unlocking purchase may be reversed (gift revoked)
+    expect((await reverse(p4.json().purchase.id)).statusCode).toBe(200);
+    const rev = await reverse(ids[2]!);
     expect(rev.statusCode).toBe(200);
     expect(rev.json().purchase.status).toBe('reversed');
-    expect(rev.json().warnings.join(' ')).toMatch(/already used/);
+    const after = await ctx.app.inject({ method: 'GET', url: '/me', headers: await ctx.tma(CLIENT_TG) });
+    expect(after.json().gifts.find((g: { id: string }) => g.id === gift.id)?.status ?? 'revoked').toBe('revoked');
   });
 
   it('returns 404 for an unknown client or purchase', async () => {

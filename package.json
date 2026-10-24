@@ -22,7 +22,8 @@
     "dev": "npm run dev -w @honey/worker",
     "dev:api": "npm run build -w @honey/core && npm run build -w @honey/service && npm run dev -w @honey/api",
     "deploy": "npm run deploy -w @honey/worker",
-    "db:migrate:remote": "npm run db:migrate:remote -w @honey/worker"
+    "db:migrate:remote": "npm run db:migrate:remote -w @honey/worker",
+    "qa": "node qa/run.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.20.5",

@@ -1,7 +1,9 @@
 import {
+  activePurchaseCount,
   activePurchases,
-  availableRewards,
-  balanceFromLedger,
+  availableGiftCount,
+  balanceOf,
+  levelTotals,
   dayNumberFromKey,
   deriveLevel,
   expiryInfo,
@@ -28,14 +30,21 @@ export interface ClientStats {
   activityAt: string;
   /** Last day the balance is valid (YYYY-MM-DD, Tashkent), '' when the balance is not positive. */
   expiresOn: string;
+  /**
+   * All-time level totals (core levelTotals): active purchases at/after the level override.
+   * With balance and purchasesCount they let D1Repository load a BOUNDED state (migration 0010).
+   */
+  levelSum: number;
+  levelCount: number;
 }
 
 export function computeClientStats(rules: LoyaltyRules, state: ClientState, now: Date): ClientStats {
-  const balance = balanceFromLedger(state.ledger);
+  const balance = balanceOf(state);
   const level = deriveLevel(rules, state, now);
-  const active = activePurchases(state);
+  const totals = levelTotals(state);
+  // A bounded state always carries the latest active purchases (D1Repository), so the max is exact.
   let last = '';
-  for (const p of active) {
+  for (const p of activePurchases(state)) {
     const at = p.createdAt.toISOString();
     if (at > last) last = at;
   }
@@ -43,12 +52,14 @@ export function computeClientStats(rules: LoyaltyRules, state: ClientState, now:
   return {
     balance,
     spent: level.metric,
-    purchasesCount: active.length,
+    purchasesCount: activePurchaseCount(state),
     lastPurchaseAt: last,
     levelId: level.tier.id,
-    giftsAvailable: availableRewards(state).length,
+    giftsAvailable: availableGiftCount(state),
     activityAt: exp.anchor.toISOString(),
     expiresOn: balance > 0 ? keyFromDayNumber(dayNumberFromKey(exp.expiresOn) - 1) : '',
+    levelSum: totals.sum,
+    levelCount: totals.count,
   };
 }
 
@@ -61,6 +72,8 @@ export function sameStats(a: ClientStats, b: ClientStats): boolean {
     a.levelId === b.levelId &&
     a.giftsAvailable === b.giftsAvailable &&
     a.activityAt === b.activityAt &&
-    a.expiresOn === b.expiresOn
+    a.expiresOn === b.expiresOn &&
+    a.levelSum === b.levelSum &&
+    a.levelCount === b.levelCount
   );
 }

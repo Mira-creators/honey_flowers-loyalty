@@ -5,6 +5,8 @@ import { THEMES, applyTheme } from '../config/themes';
 import { api, ApiErr, clearTestUser } from '../api';
 import { tg } from '../tg';
 import { esc, toast, sheet, closeLayer, fmt } from '../ui/dom';
+import { loadOwnerTab } from './owner';
+import { loadRecent } from './staff';
 
 export const testButton = () => S.me?.testMode ? `<button class="test-fab" data-act="openTest" aria-label="Панель тестирования">🧪 Тест</button>` : '';
 
@@ -21,6 +23,10 @@ function panelHtml() {
     <p style="margin:0 0 8px">Сегодня по часам программы: <b>${esc(now)}</b>${me.clockOffsetDays ? ` (сдвиг +${me.clockOffsetDays} дн.)` : ''}</p>
     <div class="chips">${[1, 7, 30, 76, 90].map(d => `<button class="chip" data-act="testClock" data-days="${d}">+${d} дн.</button>`).join('')}<button class="chip" data-act="testClock" data-days="reset">Сбросить</button></div>
     <button class="b full" data-act="testExpiry" style="margin-top:8px;justify-content:center">Запустить ночную задачу: сгорание и напоминания</button>
+    <div class="sub">Демо-данные для показа</div>
+    <p style="margin:0 0 8px">~250 клиентов с покупками за полгода: уровни, подарки, оплата мёдом, сгоревший мёд, отмены, 4 флориста. Клиентам ничего не отправляется; удаляются только они.</p>
+    <div class="demo-prog" id="demoProg" ${demoBusy ? '' : 'hidden'}><div class="bar"><i id="demoBar" style="width:${demoPct}%"></i></div><span id="demoTxt">${esc(demoText)}</span></div>
+    <div class="grid2"><button class="b" data-act="demoSeed" ${demoBusy ? 'disabled' : ''} style="justify-content:center">Заполнить демо-данными</button><button class="b danger-outline" data-act="demoClear" ${demoBusy ? 'disabled' : ''} style="justify-content:center">Удалить демо-данные</button></div>
     <div class="sub">Дизайн</div>
     <div class="chips">${Object.entries(THEMES).map(([id, t]) => `<button class="chip" data-act="testTheme" data-th="${id}" aria-pressed="${S.themeId === id}">${esc(t.name)}</button>`).join('')}</div>
     <div class="sub">Сначала</div>
@@ -65,3 +71,50 @@ actions.testResetMe = async () => {
   catch (e) { toast((e as ApiErr).message, 'error'); }
 };
 actions.testLogout = () => { clearTestUser(); location.href = location.pathname; };
+
+/* ---------- demo data: chunked seeding with a progress bar (each request stays within Workers Free limits) ---------- */
+let demoBusy = false, demoPct = 0, demoText = '';
+function demoProgress(done: number, total: number, label = 'Заполняю…') {
+  demoPct = total ? Math.round((done / total) * 100) : 0;
+  demoText = `${label} ${done}/${total}`;
+  const box = document.getElementById('demoProg'), bar = document.getElementById('demoBar'), txt = document.getElementById('demoTxt');
+  if (box) box.hidden = false;
+  if (bar) bar.style.width = demoPct + '%';
+  if (txt) txt.textContent = demoText;
+}
+async function afterDemoChange() {
+  await app.refresh();
+  if (S.me?.role === 'owner' && S.owner.tab !== 'desk') await loadOwnerTab();
+  else if (S.me && S.me.role !== 'client') await loadRecent();
+}
+actions.demoSeed = async () => {
+  if (demoBusy) return;
+  demoBusy = true; openTestPanel(); demoProgress(0, 250);
+  try {
+    let chunk: number | null = 0, done = 0, total = 250;
+    while (chunk !== null) {
+      let r;
+      try { r = await api.test.demoSeed(chunk); }
+      catch { r = await api.test.demoSeed(chunk); } // one retry: the chunk is idempotent
+      done = r.done; total = r.total; chunk = r.nextChunk;
+      demoProgress(done, total);
+    }
+    tg.haptic('success');
+    toast(`Готово: ${done} демо-клиентов с историей за полгода`, 'ok');
+    demoBusy = false; closeLayer(); await afterDemoChange();
+  } catch (e) { toast((e as ApiErr).message, 'error'); }
+  finally { demoBusy = false; demoText = ''; if (document.getElementById('demoProg')) openTestPanel(); }
+};
+let clearArmed = 0;
+actions.demoClear = async el => {
+  if (demoBusy) return;
+  // Two taps: the first one asks for confirmation.
+  if (Date.now() - clearArmed > 4000) { clearArmed = Date.now(); el.textContent = 'Точно удалить? Нажмите ещё раз'; return; }
+  clearArmed = 0; demoBusy = true; el.textContent = 'Удаляю…';
+  try {
+    const r = await api.test.demoClear();
+    toast(r.clients ? `Удалено демо-клиентов: ${r.clients}, демо-флористов: ${r.staff}` : 'Демо-данных не было', 'ok');
+    demoBusy = false; closeLayer(); await afterDemoChange();
+  } catch (e) { toast((e as ApiErr).message, 'error'); }
+  finally { demoBusy = false; }
+};

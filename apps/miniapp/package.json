@@ -5,12 +5,14 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "tsc --noEmit && vite build && vite build -c vite.console.config.ts",
     "typecheck": "tsc --noEmit",
-    "e2e": "vite build && node test/e2e.js"
+    "e2e": "npm run build && node test/e2e.js",
+    "e2e:demo": "npm run build && node test/e2e-demo.js"
   },
   "dependencies": {
     "@honey/contracts": "0.1.0",
+    "fflate": "0.8.2",
     "qrcode-generator": "1.4.4"
   },
   "devDependencies": {

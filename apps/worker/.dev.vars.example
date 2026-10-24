@@ -3,3 +3,10 @@ BOT_TOKEN=123456789:replace-with-real-token
 WEBHOOK_SECRET=local-webhook-secret
 SETUP_KEY=local-setup-key
 TEST_KEY=local-test-key
+# Optional: key of the owner console browser sessions (default: derived from BOT_TOKEN)
+# WEB_SESSION_SECRET=local-web-session-secret
+# Optional monitoring: Telegram chat ids for alerts (comma-separated) and the daily «ок» message.
+# ALERT_CHAT_ID=123456789
+# ALERT_DAILY=1
+# Optional: only these Telegram ids / +998 phones get the test features (lib/testAccess.ts); empty = everyone locally.
+# TEST_USERS=123456789,+998901234567,900000001

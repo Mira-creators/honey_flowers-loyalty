@@ -1,6 +1,6 @@
 import { emptyOutcome, type Outcome } from '../outcome.js';
 import type { LoyaltyRules } from '../rules.js';
-import { balanceFromLedger, cardPosition, deriveLevel, expiryInfo, lastExpiry } from '../state.js';
+import { balanceOf, cardPosition, deriveLevel, expiryInfo, lastExpiry } from '../state.js';
 import type { ClientState } from '../types.js';
 
 /**
@@ -39,7 +39,7 @@ export function settleExpiry(rules: LoyaltyRules, state: ClientState, now: Date)
   const done = expiryDone(state, info.anchor);
 
   const mode = rules.expiry.onExpiry;
-  const balance = balanceFromLedger(state.ledger);
+  const balance = balanceOf(state);
   const level = deriveLevel(rules, state, now);
   const pos = cardPosition(rules, state);
   const burnsBalance = balance > 0 && !done.ledger;
@@ -106,7 +106,7 @@ export function runExpiry(rules: LoyaltyRules, state: ClientState, now: Date): O
   if (expired.ledger.length || expired.levelOverride !== undefined || expired.cardMoves.length) return expired;
 
   const out = emptyOutcome();
-  const balance = balanceFromLedger(state.ledger);
+  const balance = balanceOf(state);
   if (balance <= 0) return out;
   const info = expiryInfo(rules, state, now);
   if (info.daysLeft <= 0) return out;

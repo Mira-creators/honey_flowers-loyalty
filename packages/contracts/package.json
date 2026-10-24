@@ -2,12 +2,13 @@
   "name": "@honey/contracts",
   "version": "0.1.0",
   "private": true,
-  "description": "HTTP contract (types only) between the Mini App and the Worker",
+  "description": "HTTP contract between the Mini App, the owner console and the Worker (types + dependency-free import helpers, consumed as TypeScript source)",
   "type": "module",
   "types": "./src/index.ts",
   "exports": {
     ".": {
-      "types": "./src/index.ts"
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
     }
   },
   "files": ["src"],

@@ -14,6 +14,15 @@ export * from './state.js';
 export { registerClient } from './commands/register.js';
 export { applyPurchase, maxRedeemable, cellMovesOnDay, rewardId, type PurchaseInput } from './commands/purchase.js';
 export { redeem, type RedeemInput } from './commands/redeem.js';
-export { reversePurchase, type ReverseInput } from './commands/reverse.js';
+export { reversePurchase, reversalBlock, type ReverseInput, type ReversalBlock } from './commands/reverse.js';
 export { runExpiry, settleExpiry } from './commands/expiry.js';
 export { manualAdjust, type ManualAdjustInput } from './commands/manualAdjust.js';
+export {
+  grantGift,
+  grantPoints,
+  grantRewardId,
+  isGrantedReward,
+  GRANT_REWARD_PREFIX,
+  type GrantGiftInput,
+  type GrantPointsInput,
+} from './commands/grant.js';

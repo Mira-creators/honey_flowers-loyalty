@@ -1,3 +1,4 @@
+import { testPolicy } from '../lib/testAccess.js';
 import { normalizePhone, timingSafeEqualStr } from '@honey/service';
 import type { Context } from 'hono';
 import { getBotInfo } from '../bot/bot.js';
@@ -75,9 +76,13 @@ export async function handleSetup(c: Context, app: AppContext): Promise<Response
       const { kind, value } = classifyPhoneOrId(ownerArg);
       if (kind === 'ambiguous') throw new Error(`"${ownerArg}" is ambiguous: write a phone as +998… (URL-encode + as %2B) or a Telegram id as id:${ownerArg}`);
       const phone = kind === 'phone' ? normalizePhone(value) : null;
+      // A mistyped phone ("+12345") must not fall through to Number(value) and become a Telegram id.
+      if (kind === 'phone' && !phone) throw new Error(`"${ownerArg}" is not a valid phone number: write it as +998… (URL-encode + as %2B)`);
       const telegramId = phone ? null : Number(value);
       if (!phone && (!Number.isSafeInteger(telegramId) || telegramId! <= 0)) throw new Error('owner must be a phone (+998…) or a Telegram id');
-      const client = phone ? await app.repo.findClientByPhone(phone) : await app.repo.findClientByTelegramId(telegramId!);
+      const found = phone ? await app.repo.findClientByPhone(phone) : await app.repo.findClientByTelegramId(telegramId!);
+      // Imported clients (old base) carry a negative placeholder id: not a Telegram account.
+      const client = found && found.telegramId > 0 ? found : null;
       const member = await app.repo.upsertStaff(
         { telegramId: client?.telegramId ?? telegramId, phone: phone ?? client?.phone ?? null, name: client?.name ?? 'Владелец', role: 'owner' },
         app.now(),
@@ -94,6 +99,7 @@ export async function handleSetup(c: Context, app: AppContext): Promise<Response
       webhook: webhookUrl,
       bot: username ? `https://t.me/${username}` : null,
       testMode: app.testMode,
+      testUsers: testPolicy(app.env).mode,
       steps,
       next: ok
         ? 'Готово. Откройте бота в Telegram и нажмите /start.'

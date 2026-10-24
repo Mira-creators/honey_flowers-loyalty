@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { applyOutcome, applyPurchase, LoyaltyError, reversePurchase } from '../src/index.js';
-import { at, eventTypes, flowers, plusDays, Sim } from './helpers.js';
+import { at, eventTypes, flowers, makeRules, plusDays, Sim } from './helpers.js';
 
 const d0 = at('2026-11-01 12:00');
 
@@ -65,23 +65,22 @@ describe('reversal of a purchase', () => {
     expect(sim.gifts('available')).toHaveLength(1);
   });
 
-  it('keeps an unlocked gift that was already used and flags it in warnings', () => {
-    const sim = new Sim();
+  it('refuses when a gift unlocked by the purchase was already used (REVERSAL_GIFT_USED)', () => {
+    const sim = new Sim(makeRules({ reversalWindowHours: 720 }));
     for (let i = 0; i < 3; i++) sim.buy(150_000, plusDays(d0, i));
     const gift = sim.gifts('available')[0]!;
     sim.buy(150_000, plusDays(d0, 3), { useRewardId: gift.id }); // p4 uses the card gift
-    const o = sim.reverse('p3', plusDays(d0, 4));
+    expect(() => sim.reverse('p3', plusDays(d0, 4))).toThrow(LoyaltyError);
+    expect(sim.state.purchases.find((p) => p.id === 'p3')?.status).toBe('active');
     expect(sim.state.rewards.find((r) => r.id === gift.id)?.status).toBe('used');
-    expect(o.warnings.join('\n')).toMatch(/already used in purchase p4/);
   });
 
-  it('goes negative and warns when accrued points were already spent', () => {
+  it('refuses when the accrued points were already spent (REVERSAL_POINTS_SPENT): never a negative balance', () => {
     const sim = new Sim();
     sim.seedPoints(10_000, d0); // p1: 1M → 10 000
-    sim.buy(100_000, plusDays(d0, 1), { redeemPoints: 10_000 }); // p2 spends them, earns 900
-    const o = sim.reverse('p1', plusDays(d0, 2));
-    expect(sim.balance).toBe(900 - 10_000);
-    expect(o.warnings.join('\n')).toMatch(/negative/);
+    sim.buy(100_000, new Date(d0.getTime() + 3_600_000), { redeemPoints: 10_000 }); // p2 spends them, earns 900
+    expect(() => sim.reverse('p1', new Date(d0.getTime() + 2 * 3_600_000))).toThrow(/spent/);
+    expect(sim.balance).toBe(900);
   });
 
   it('emits level_down when the reversal drops the level', () => {

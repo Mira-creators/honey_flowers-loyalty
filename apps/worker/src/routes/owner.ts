@@ -5,11 +5,10 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { requireRole, type Vars } from '../auth.js';
 import type { AppContext } from '../context.js';
-import { DAY_MS } from '../lib/clock.js';
-import { tashkentDayStartIso } from '../lib/dto.js';
 import { HttpError } from '../lib/errors.js';
 import { applyEditable, toEditable } from '../lib/rulesEditor.js';
 import { operationsFor } from '../lib/summary.js';
+import { addDays, DayTable, daysFromStmt, mondayOf } from '../lib/statsRead.js';
 import { ownerClientRoutes } from './ownerClients.js';
 
 export const ownerRoutes = new Hono<{ Variables: Vars }>();
@@ -21,41 +20,41 @@ ownerRoutes.use('*', async (c, next) => {
 
 // ------------------------------------------------------------ stats
 
-/** Monday (Tashkent local date) of the week containing `d`. */
-function weekStartKey(d: Date): string {
-  const key = localDateKey(d, 'Asia/Tashkent');
-  const day = new Date(`${key}T00:00:00Z`);
-  const dow = (day.getUTCDay() + 6) % 7; // 0 = Monday
-  return new Date(day.getTime() - dow * DAY_MS).toISOString().slice(0, 10);
-}
-
+/**
+ * GET /api/owner/stats — from the daily aggregates (stats_daily, migration 0007): the '*' row and
+ * the last 90 Tashkent days, ONE query (~100 rows read whatever the number of purchases).
+ * "7 days" / "90 days" are calendar days including today; repeatRate90d = clients with ≥ 2 active
+ * purchases in those 90 days / clients with ≥ 1 (summed from last_buyers / prev_buyers).
+ */
 ownerRoutes.get('/stats', async (c) => {
   const app = c.get('app');
   const now = app.now();
-  const thisWeek = weekStartKey(now);
-  const weeks = Array.from({ length: 8 }, (_, i) => new Date(new Date(`${thisWeek}T00:00:00Z`).getTime() - (7 - i) * 7 * DAY_MS).toISOString().slice(0, 10));
-  const since8w = tashkentDayStartIso(weeks[0]!);
-  const iso = (ms: number) => new Date(ms).toISOString();
-  const r = await app.repo.statsRows(now.toISOString(), iso(now.getTime() - 7 * DAY_MS), iso(now.getTime() - 90 * DAY_MS), since8w);
-  const perWeek = new Map(weeks.map((w) => [w, 0]));
-  for (const w of r.weekly) if (perWeek.has(w.weekStart)) perWeek.set(w.weekStart, w.purchases);
-  const buyers = Number(r.repeat.buyers ?? 0);
+  const today = localDateKey(now, 'Asia/Tashkent');
+  const thisWeek = mondayOf(today);
+  const weeks = Array.from({ length: 8 }, (_, i) => addDays(thisWeek, -7 * (7 - i)));
+  const from90 = addDays(today, -89);
+  const days = new DayTable((await daysFromStmt(app.repo.db, weeks[0]! < from90 ? weeks[0]! : from90, true).all<Record<string, unknown>>()).results);
+  const t = days.total;
+  // Windows ending today: clients whose last (second-to-last) purchase is in the window.
+  const live = !days.activityAfter(today);
+  const buyers = live ? days.sum('last_buyers', from90, '9999-12-31') : 0;
+  const repeaters = live ? days.sum('prev_buyers', from90, '9999-12-31') : 0;
   const body: OwnerStatsDTO = {
-    clients: Number(r.counts.clients),
-    clientsNew7d: Number(r.counts.clients_new_7d),
-    purchases: Number(r.counts.purchases),
-    purchases7d: Number(r.counts.purchases_7d),
-    revenueWithCard: Number(r.counts.revenue),
-    repeatRate90d: buyers ? Number(r.repeat.repeaters) / buyers : 0,
+    clients: t.new_clients + t.imported_clients,
+    clientsNew7d: days.sum('new_clients', addDays(today, -6), today),
+    purchases: t.purchases,
+    purchases7d: days.sum('purchases', addDays(today, -6), today),
+    revenueWithCard: t.revenue,
+    repeatRate90d: buyers ? repeaters / buyers : 0,
     points: {
-      accrued: Number(r.points.accrued),
-      redeemed: Number(r.points.redeemed),
-      expired: Number(r.points.expired),
-      outstanding: Number(r.points.outstanding),
+      accrued: t.honey_accrued,
+      redeemed: t.honey_redeemed,
+      expired: t.honey_expired,
+      outstanding: t.honey_accrued - t.honey_redeemed - t.honey_expired + t.honey_imported,
     },
-    giftsUnlocked: Number(r.gifts.unlocked),
-    giftsUsed: Number(r.gifts.used),
-    perWeek: weeks.map((w) => ({ weekStart: w, purchases: perWeek.get(w)! })),
+    giftsUnlocked: t.gifts_unlocked,
+    giftsUsed: t.gifts_used,
+    perWeek: weeks.map((w) => ({ weekStart: w, purchases: days.sum('purchases', w, addDays(w, 6)) })),
   };
   return c.json(body);
 });
@@ -118,10 +117,14 @@ async function resolveStaffTarget(app: AppContext, raw: string | number) {
   if (kind === 'phone') {
     const phone = normalizePhone(s);
     if (!phone) throw new HttpError(400, 'validation', 'Не похоже на номер телефона');
-    const client = await app.repo.findClientByPhone(phone);
+    const found = await app.repo.findClientByPhone(phone);
+    // An imported client (old base) has a negative placeholder id: not a Telegram account yet.
+    const client = found && found.telegramId > 0 ? found : null;
     const user = client ? await app.repo.getTgUser(client.telegramId) : null;
-    return { telegramId: client?.telegramId ?? null, phone, name: client?.name ?? user?.firstName ?? null };
+    return { telegramId: client?.telegramId ?? null, phone, name: client?.name ?? found?.name ?? user?.firstName ?? null };
   }
+  // Only a plain number is a Telegram id: "@ivan_2002", "id:12a" or "1e+21" must not turn into 2002 / 12 / 121.
+  if (!/^\d+$/.test(value)) throw new HttpError(400, 'validation', 'Укажите телефон (+998 90 123 45 67) или Telegram ID цифрами (id:123456789)');
   const id = Number(digits);
   if (!Number.isSafeInteger(id) || id <= 0) throw new HttpError(400, 'validation', 'Укажите телефон или Telegram ID');
   const client = await app.repo.findClientByTelegramId(id);
@@ -150,10 +153,10 @@ ownerRoutes.delete('/staff/:id', async (c) => {
   const caller = c.get('caller');
   const target = await app.repo.findStaffById(c.req.param('id'));
   if (!target) throw new HttpError(404, 'not_found', 'Сотрудник не найден');
-  if (target.role === 'owner' && target.active && (await app.repo.countActiveOwners()) <= 1 && !app.testMode) {
+  if (target.role === 'owner' && target.active && (await app.repo.countActiveOwners()) <= 1 && !caller.tester) {
     throw new HttpError(409, 'conflict', 'Нельзя отключить последнего владельца');
   }
-  if (caller.staff?.id === target.id && !app.testMode) throw new HttpError(409, 'conflict', 'Нельзя отключить самого себя');
+  if (caller.staff?.id === target.id && !caller.tester) throw new HttpError(409, 'conflict', 'Нельзя отключить самого себя');
   const updated = await app.repo.deactivateStaff(target.id);
   return c.json(staffDTO(updated!));
 });

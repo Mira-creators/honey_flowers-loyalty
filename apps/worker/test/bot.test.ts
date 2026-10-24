@@ -32,8 +32,15 @@ describe('telegram webhook', () => {
       resize_keyboard: true,
       one_time_keyboard: true,
     });
+    // Menu: Mini App + help + language (no owner summary for a client).
     expect(card!.payload.reply_markup).toEqual({
-      inline_keyboard: [[{ text: '🐝 Открыть медовую карту', web_app: { url: 'https://honey.example.workers.dev' } }]],
+      inline_keyboard: [
+        [{ text: '🐝 Открыть медовую карту', web_app: { url: 'https://honey.example.workers.dev' } }],
+        [
+          { text: '🍯 Как копить мёд', callback_data: 'help' },
+          { text: '🌐 Язык / Til', callback_data: 'lang' },
+        ],
+      ],
     });
     // getMe is called once and cached.
     await webhook(commandUpdate(USER, '/card'));

@@ -10,6 +10,7 @@ import { IC } from '../ui/icons';
 import { combSVG, giftSvg } from '../ui/comb';
 import { histRow } from './client';
 import { openClient } from './staff';
+import { openGrantSheet } from './grantSheet';
 
 const PAGE = 30;
 const STATUS_CHIPS: Array<[ClientStatus | '', string]> = [
@@ -77,7 +78,7 @@ function cardView() {
   const back = '<button class="back" data-act="closeClient">‹ Все клиенты</button>';
   if (!k) return back + (c.cardError ? `<div class="note-box warn">${esc(c.cardError)} <button class="link" data-act="clientReload">Повторить</button></div>` : '<p class="mut">Загрузка…</p>');
   const gifts = k.gifts.length
-    ? k.gifts.map(g => `<div class="it ${g.status !== 'available' ? 'dim' : ''}"><div class="ic">${giftSvg}</div><div><div class="t">${esc(GIFT_LABELS[g.type] ?? g.type)}</div><div class="s">карта ${g.cycle}, ячейка ${g.cell} · ${g.status === 'available' ? 'ждёт клиента' : g.status === 'used' ? 'выдан' : 'отменён'}</div></div><span></span></div>`).join('')
+    ? k.gifts.map(g => `<div class="it ${g.status !== 'available' ? 'dim' : ''}"><div class="ic">${giftSvg}</div><div><div class="t">${esc(GIFT_LABELS[g.type] ?? g.type)}</div><div class="s">${g.source === 'grant' ? `подарок владельца${g.reason ? ': ' + esc(g.reason) : ''}` : `карта ${g.cycle}, ячейка ${g.cell}`} · ${g.status === 'available' ? 'ждёт клиента' : g.status === 'used' ? 'выдан' : 'отменён'}</div></div><span></span></div>`).join('')
     : '<p class="mut">Подарков пока нет.</p>';
   return `${back}
     <div class="cl"><div class="ava">${esc((k.name || '?').slice(0, 1).toUpperCase())}</div><div>
@@ -85,13 +86,15 @@ function cardView() {
       <div class="mut">${esc(k.phone ?? k.phoneMasked)}</div>
       <div class="mut">${esc(k.level.name)} · ${k.level.pct}% · в программе с ${esc(dateRu(k.registeredAt))}</div></div></div>
     <div class="bal small"><span class="l">Мёд на счёте</span><span class="n" id="cardBal">${fmt(k.balance)}<small>мёда</small></span><span class="e">${k.expiresOn && k.balance > 0 ? `действует до<br><b>${esc(dayRu(k.expiresOn))}</b>` : ''}</span></div>
-    <div class="grid2"><button class="b acc" data-act="openAdjust">Скорректировать мёд</button><button class="b pri" data-act="chargeClient">${IC.card}Начислить покупку</button></div>
+    <div class="grid2"><button class="b acc" data-act="openAdjust">Скорректировать мёд</button><button class="b pri" data-act="chargeClient">${IC.card}Начислить покупку</button>
+      <button class="b full" data-act="grantFromCard">🎁 Подарок или мёд без покупки</button></div>
     <div class="comb-card"><div class="comb-meta"><span>Карта ${k.card.cycle} · <b>${k.card.filled} из ${k.card.cells}</b></span><span>потрачено ${fmt(k.spent)} сум</span></div>${combSVG(THEMES[S.themeId], k.card, k.card.filled)}</div>
     <div class="sub">Заметка</div>
     <textarea id="cnote" data-input="noteDraft" maxlength="500" rows="3" placeholder="Например: любит пионы, звонить после 18:00">${esc(c.noteDraft ?? k.note ?? '')}</textarea>
     <button class="b full" data-act="saveNote" style="margin-top:6px">Сохранить заметку</button>
     <div class="sub">Подарки</div><div class="list">${gifts}</div>
-    <div class="sub">История · ${k.history.length}</div><div class="list">${k.history.length ? k.history.map(h => histRow(h, T('ru'))).join('') : '<p class="mut">Операций пока нет.</p>'}</div>`;
+    <div class="sub">История · ${k.history.length}${k.historyNext ? '+' : ''}</div><div class="list">${k.history.length ? k.history.map(h => histRow(h, T('ru'))).join('') : '<p class="mut">Операций пока нет.</p>'}</div>
+    ${k.historyNext ? `<button class="b full" data-act="historyMore" style="margin-top:8px" ${c.historyLoading ? 'disabled' : ''}>${c.historyLoading ? 'Загружаем…' : 'Показать ещё'}</button>` : ''}`;
 }
 
 /* ---------------- data ---------------- */
@@ -155,6 +158,23 @@ actions.openClient = el => {
   loadCard(id);
 };
 actions.closeClient = () => closeClientCard();
+/** Owner grant (screens/grantSheet.ts); the sheet broadcasts `honey:client-updated`, the card reloads below. */
+actions.grantFromCard = () => { const k = cl().card; if (k) openGrantSheet(k.id, k.name); };
+document.addEventListener('honey:client-updated', e => {
+  const id = (e as CustomEvent<{ id: string }>).detail?.id;
+  if (id && cl().cardId === id) void loadCard(id).then(() => { const k = cl().card; if (k) patchRow(k); });
+});
+/** Older history of the open card, 50 items per page (GET /api/owner/clients/:id/history). */
+actions.historyMore = async () => {
+  const c = cl(), k = c.card;
+  if (!k?.historyNext || c.historyLoading) return;
+  c.historyLoading = true; app.render();
+  try {
+    const page = await api.clientHistory(k.id, k.historyNext);
+    if (c.card?.id === k.id) { c.card.history = [...c.card.history, ...page.items]; c.card.historyNext = page.next; }
+  } catch (e) { toast((e as ApiErr).message, 'error'); }
+  finally { c.historyLoading = false; app.render(); }
+};
 actions.clientReload = () => { const id = cl().cardId; if (id) loadCard(id); };
 actions.saveNote = async () => {
   const k = cl().card; if (!k) return;

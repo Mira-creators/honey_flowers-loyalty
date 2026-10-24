@@ -15,6 +15,10 @@ export type StaffRole = 'florist' | 'manager' | 'owner';
 
 export interface ClientProfile {
   id: string;
+  /**
+   * Telegram user id. NEGATIVE for a client imported from the shop's old base who has not
+   * opened the bot yet (see `isUnlinkedTelegramId`); never send messages to such an id.
+   */
   telegramId: number;
   phone: string | null;
   name: string | null;
@@ -24,6 +28,8 @@ export interface ClientProfile {
   createdAt: Date;
   /** Short code shown as QR on the client card, e.g. "HF4821" (D1 only; '' in memory). */
   code: string;
+  /** TEST_MODE demo record (apps/worker demo seeding): never messaged, removed by «Удалить демо-данные». */
+  demo?: boolean;
 }
 
 export interface StaffMember {
@@ -63,6 +69,22 @@ export interface SavedState {
   now: Date;
 }
 
+/**
+ * What a command will look at, so a repository may load a BOUNDED state (apps/worker: the latest
+ * purchases + these rows + ClientState.folded aggregates) instead of the whole history.
+ * Without a hint a repository returns the full state.
+ */
+export interface LoadHint {
+  now?: Date;
+  rules?: LoyaltyRules;
+  /** A purchase the command works on (reversal): it, its ledger rows, card moves and gifts are loaded. */
+  purchaseId?: string | null;
+  /** Idempotency keys the command checks (purchases, ledger rows and gift hand-outs with these keys). */
+  keys?: string[];
+  /** Gifts the command uses / checks by id. */
+  rewardIds?: string[];
+}
+
 export interface VersionedState {
   state: ClientState;
   /** Monotonic per-client version of the stored facts (0 = nothing saved yet). */
@@ -90,8 +112,11 @@ export interface Repository {
 
   findStaffByTelegramId(telegramId: number): Promise<StaffMember | null>;
 
-  /** Full engine snapshot of one client (ledger, purchases, card, rewards) + its version. */
-  loadClientState(clientId: string): Promise<VersionedState>;
+  /**
+   * Engine snapshot of one client + its version. Without `hint`: the full history. With a hint a
+   * repository may return a bounded state (ClientState.folded) that gives the command identical results.
+   */
+  loadClientState(clientId: string, hint?: LoadHint): Promise<VersionedState>;
   /**
    * Persist all facts of an outcome atomically, iff the stored version is
    * still `expectedVersion` (then it becomes expectedVersion + 1).
@@ -106,6 +131,17 @@ export interface Repository {
   findPurchaseByIdempotencyKey(key: string): Promise<PurchaseRecord | null>;
 
   allClientIds(): Promise<string[]>;
+  /**
+   * Imported-client claim (optional; D1 and in-memory implement it). Attach a real Telegram
+   * account to a client created by a base import (telegram_id is still the negative
+   * placeholder, see `placeholderTelegramId`). Must be atomic: returns null if the row is
+   * no longer unlinked (someone else claimed it first).
+   */
+  claimClient?(
+    clientId: string,
+    placeholderTelegramId: number,
+    patch: { telegramId: number; name: string | null; language: string; consentAt: Date },
+  ): Promise<ClientProfile | null>;
   /** Optional bulk load for the daily job (fewer round trips than one load per client). */
   loadAllClientStates?(): Promise<Map<string, VersionedState>>;
 }

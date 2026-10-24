@@ -1,6 +1,6 @@
 import { applyOutcome, emptyOutcome, mergeOutcomes, type Outcome } from '../outcome.js';
 import type { LoyaltyRules } from '../rules.js';
-import { balanceFromLedger } from '../state.js';
+import { balanceOf } from '../state.js';
 import type { ClientState } from '../types.js';
 import { assert } from './common.js';
 import { settleExpiry } from './expiry.js';
@@ -35,7 +35,7 @@ export function manualAdjust(rules: LoyaltyRules, state: ClientState, input: Man
     idempotencyKey: input.idempotencyKey,
     createdAt: now,
   });
-  const balance = balanceFromLedger(s.ledger) + input.amount;
+  const balance = balanceOf(s) + input.amount;
   if (balance < 0) out.warnings.push('balance becomes negative');
   out.events.push({ type: 'points_adjusted', clientId: s.clientId, amount: input.amount, balance, reason: input.reason.trim() });
   return mergeOutcomes(expiry, out);

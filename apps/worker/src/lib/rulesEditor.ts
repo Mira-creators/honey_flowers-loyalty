@@ -15,6 +15,7 @@ export function toEditable(rules: LoyaltyRules): EditableRulesDTO {
     expiryDays: rules.expiry.expiryDays,
     expiryWarnDays: [...rules.expiry.expiryWarnDays].sort((a, b) => b - a),
     welcomeBonus: rules.welcomeBonus,
+    reversalWindowHours: rules.reversalWindowHours,
     cells: rules.honeycomb.cells,
     gifts: giftLayout(rules.honeycomb.rewards),
     version: rules.version,
@@ -42,6 +43,9 @@ export const editableRulesSchema = z
     expiryDays: int(1, 3650),
     expiryWarnDays: z.array(int(1, 365)).max(5),
     welcomeBonus: int(0, 100_000_000),
+    // Owner decision (item 8): staff may reverse a purchase only within N hours. Older Mini App builds
+    // do not send it: keep the current value then.
+    reversalWindowHours: int(1, 720).optional(),
     cells: int(1, 50),
     gifts: z.record(z.string().regex(/^\d{1,2}$/), z.string().regex(GIFT_CODE_RE, 'card | delivery | mini | discN')),
     version: z.number().int().positive(),
@@ -91,6 +95,7 @@ export function applyEditable(current: LoyaltyRules, input: unknown): LoyaltyRul
     },
     maxRedeemPct: e.maxRedeemPct,
     welcomeBonus: e.welcomeBonus,
+    reversalWindowHours: e.reversalWindowHours ?? current.reversalWindowHours,
     honeycomb: {
       ...current.honeycomb,
       minPurchaseForCell: e.minPurchaseForCell,

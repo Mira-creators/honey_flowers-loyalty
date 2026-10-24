@@ -1,4 +1,4 @@
-import { balanceFromLedger } from '../state.js';
+import { balanceOf } from '../state.js';
 import { emptyOutcome, type Outcome } from '../outcome.js';
 import type { LoyaltyRules } from '../rules.js';
 import type { ClientState } from '../types.js';
@@ -28,7 +28,7 @@ export function registerClient(rules: LoyaltyRules, state: ClientState, now: Dat
     type: 'welcome_bonus',
     clientId: state.clientId,
     amount,
-    balance: balanceFromLedger(state.ledger) + amount,
+    balance: balanceOf(state) + amount,
   });
   return out;
 }

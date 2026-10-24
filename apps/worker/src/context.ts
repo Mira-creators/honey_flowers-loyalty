@@ -15,6 +15,8 @@ export interface AppContext {
   testMode: boolean;
   clockOffsetDays: number;
   now(): Date;
+  /** Run background work after the response (ctx.waitUntil); errors are swallowed. */
+  defer(p: Promise<unknown>): void;
   /** Public https origin of the Worker (PUBLIC_URL var → stored by /setup → request origin). */
   origin(): Promise<string | null>;
 }
@@ -42,9 +44,17 @@ export async function createContext(env: Env, opts: ContextOptions = {}): Promis
   };
   const notifier = new TelegramNotifier(env, repo, origin);
   const service = new LoyaltyService(repo, notifier, now, {
-    maxRetries: 3,
+    // Optimistic concurrency: a conflicting write re-runs the command on fresh state. 6 retries with
+    // full-jitter backoff (≤ ~1.3 s in total) make «повторите» (409) rare even with several staff on
+    // one client; each retry costs 2 D1 round trips (load + save), far below the 50 per request.
+    maxRetries: 6,
+    retryDelayMs: 20,
     ...(opts.waitUntil ? { defer: opts.waitUntil } : {}),
     onNotifyError: (err, events) => console.error('notification failed', events.map((e) => e.type).join(','), err),
   });
-  return { env, repo, service, testMode, clockOffsetDays, now, origin };
+  const defer = (p: Promise<unknown>) => {
+    const safe = p.catch((err) => console.error('background task failed', err));
+    if (opts.waitUntil) opts.waitUntil(safe);
+  };
+  return { env, repo, service, testMode, clockOffsetDays, now, defer, origin };
 }

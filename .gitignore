@@ -10,3 +10,7 @@ apps/miniapp/dist/
 
 # agent worktrees
 .claude/
+
+# QA suite run artifacts
+qa/.run/
+qa/.out/

@@ -16,7 +16,7 @@ import {
   type StaffMember,
   type VersionedState,
 } from './repository.js';
-import { nationalPart, phoneDigits } from './phone.js';
+import { nationalPart, phoneDigits, placeholderTelegramId } from './phone.js';
 
 /**
  * In-memory repository: lets apps/api run and be tested without a database.
@@ -28,6 +28,8 @@ export class InMemoryRepository implements Repository {
   private staff = new Map<number, StaffMember>();
   private states = new Map<string, VersionedState>();
   private ledgerSeq = 0;
+  /** Clients created by a base import (D1: client_imports): the only ones a Telegram user may claim. */
+  private imported = new Set<string>();
 
   constructor(opts: { rules?: LoyaltyRules; staff?: Omit<StaffMember, 'id'>[] } = {}) {
     const rules = opts.rules ?? defaultRules;
@@ -83,6 +85,34 @@ export class InMemoryRepository implements Repository {
     const next = { ...c, ...patch, id: c.id, telegramId: c.telegramId };
     this.clients.set(id, next);
     return next;
+  }
+
+  async claimClient(
+    clientId: string,
+    placeholderTelegramId: number,
+    patch: { telegramId: number; name: string | null; language: string; consentAt: Date },
+  ): Promise<ClientProfile | null> {
+    const c = this.clients.get(clientId);
+    if (!c || c.demo || !this.imported.has(clientId) || c.telegramId !== placeholderTelegramId || c.telegramId >= 0) return null;
+    if (await this.findClientByTelegramId(patch.telegramId)) return null;
+    const next: ClientProfile = { ...c, telegramId: patch.telegramId, name: c.name ?? patch.name, language: patch.language, consentAt: c.consentAt ?? patch.consentAt };
+    this.clients.set(clientId, next);
+    return next;
+  }
+
+  /** Tests: add a client imported from the old base (negative placeholder Telegram id). */
+  async importClient(input: { phone: string; name: string | null; createdAt: Date }): Promise<ClientProfile> {
+    const c = await this.createClient({ telegramId: placeholderTelegramId(input.phone), name: input.name, phone: input.phone, language: 'ru', consentAt: null, createdAt: input.createdAt });
+    this.imported.add(c.id);
+    return c;
+  }
+
+  /** Tests: a TEST_MODE demo client (negative id too, but never claimable). */
+  async demoClient(input: { telegramId: number; phone: string; name: string; createdAt: Date }): Promise<ClientProfile> {
+    const c = await this.createClient({ ...input, language: 'ru', consentAt: input.createdAt });
+    const demo = { ...c, demo: true };
+    this.clients.set(c.id, demo);
+    return demo;
   }
 
   async findStaffByTelegramId(telegramId: number): Promise<StaffMember | null> {

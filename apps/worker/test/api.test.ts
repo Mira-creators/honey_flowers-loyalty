@@ -419,7 +419,8 @@ describe('test clock and expiry', () => {
     const worker = (await import('../src/index.js')).default;
     const pending: Promise<unknown>[] = [];
     await worker.scheduled(
-      { cron: '0 4 * * *', scheduledTime: Date.now(), noRetry() {} } as ScheduledController,
+      // 10:00 Tashkent: inside the 09:00–21:00 send window of the hourly job
+      { cron: '0 * * * *', scheduledTime: Date.parse(`${new Date(Date.now() + 5 * 3_600_000).toISOString().slice(0, 10)}T05:00:00Z`), noRetry() {} } as ScheduledController,
       testEnv,
       { waitUntil: (p: Promise<unknown>) => void pending.push(p), passThroughOnException() {}, props: {} } as unknown as ExecutionContext,
     );
@@ -477,7 +478,7 @@ describe('setup and misc', () => {
   });
 
   it('health, unknown API routes and CORS for localhost in TEST_MODE', async () => {
-    expect(await json(call('/health'))).toEqual({ ok: true, testMode: true });
+    expect(await json(call('/health'))).toMatchObject({ ok: true, testMode: true, db: 'ok', lastCron: null });
     expect((await call('/api/nope', { user: CLIENT })).status).toBe(404);
     const pre = await app.request('/api/me', { method: 'OPTIONS', headers: { origin: 'http://localhost:5173', 'access-control-request-method': 'GET' } }, testEnv);
     expect(pre.headers.get('access-control-allow-origin')).toBe('http://localhost:5173');

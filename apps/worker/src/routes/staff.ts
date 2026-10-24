@@ -21,7 +21,7 @@ import {
 import { maskPhone, phoneDigits, type ClientProfile } from '@honey/service';
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { actingStaff, requireRole, STAFF_ROLES, type Vars } from '../auth.js';
+import { actingStaff, requireRole, STAFF_ROLES, type Caller, type Vars } from '../auth.js';
 import type { AppContext } from '../context.js';
 import { giftDTO, levelInfo, previewFromSummary } from '../lib/dto.js';
 import { HttpError } from '../lib/errors.js';
@@ -148,14 +148,27 @@ async function ensureClient(app: AppContext, clientId: string): Promise<ClientPr
   return client;
 }
 
+export const SELF_OPERATION_MSG = 'Нельзя проводить покупку на свою карту — попросите коллегу';
+
+/**
+ * Staff are often clients too («Моя карта»), but nobody may charge a purchase, spend
+ * мёд or hand out a gift on their OWN card: the operating Telegram user must not be the
+ * client's. Exception: an owner who is a tester (TEST_MODE + TEST_USERS: testers play every role on one account).
+ */
+export function assertNotOwnCard(_app: AppContext, caller: Caller, client: ClientProfile, message = SELF_OPERATION_MSG): void {
+  if (client.telegramId !== caller.telegramId) return;
+  if (caller.tester && caller.role === 'owner') return;
+  throw new HttpError(403, 'self_operation', message);
+}
+
 staffRoutes.post('/purchase/preview', async (c) => {
   const app = c.get('app');
   const req = previewSchema.parse(await c.req.json());
-  await ensureClient(app, req.clientId);
+  assertNotOwnCard(app, c.get('caller'), await ensureClient(app, req.clientId));
   const now = app.now();
   const { rules } = await app.repo.getActiveRules(now);
   checkAmount(rules, req.amount);
-  const { state } = await app.repo.loadClientState(req.clientId);
+  const { state } = await app.repo.loadClientState(req.clientId, { now, rules, rewardIds: req.giftId ? [req.giftId] : [] });
   const plan = planPurchase(rules, state, req, 'preview', `preview-${crypto.randomUUID()}`, null, now);
   const outcome = applyPurchase(rules, state, plan.input, now);
   const body: PurchasePreviewDTO = previewFromSummary(outcome.purchase!.result!, plan.maxRedeem, outcome.rewardsUnlocked);
@@ -166,7 +179,7 @@ staffRoutes.post('/purchase', async (c) => {
   const app = c.get('app');
   const caller = c.get('caller');
   const req = purchaseSchema.parse(await c.req.json());
-  await ensureClient(app, req.clientId);
+  assertNotOwnCard(app, caller, await ensureClient(app, req.clientId));
   checkAmount((await app.repo.getActiveRules(app.now())).rules, req.amount);
   const other = await app.repo.findPurchaseByIdempotencyKey(req.idempotencyKey);
   if (other && other.clientId !== req.clientId) {
@@ -181,7 +194,7 @@ staffRoutes.post('/purchase', async (c) => {
       throw new LoyaltyError('IDEMPOTENCY_CONFLICT', 'same idempotencyKey, different purchase');
     }
     return { outcome: applyPurchase(rules, state, plan.input, now), extra: { maxRedeem: plan.maxRedeem } };
-  });
+  }, { keys: [req.idempotencyKey], rewardIds: req.giftId ? [req.giftId] : [] });
   const p = res.outcome.purchase!;
   const result = p.result!;
   const purchaseRules = p.rulesVersion === res.rules.version ? res.rules : (await app.repo.getRulesVersion(p.rulesVersion)) ?? res.rules;
@@ -216,7 +229,7 @@ staffRoutes.post('/purchase/:id/reverse', async (c) => {
     const current = state.purchases.find((p) => p.id === purchase.id);
     if (current?.status === 'reversed') throw new HttpError(409, 'already_reversed', 'Эта покупка уже отменена');
     return reversePurchase(rules, state, { purchaseId: purchase.id, reason, staffId: staff.id }, now);
-  });
+  }, { purchaseId: purchase.id });
   const body: ReverseResultDTO = {
     client: await summaryFor(app, res.rules, purchase.clientId, res.now, res.state),
     warnings: res.outcome.warnings.map(translateWarning),
@@ -232,6 +245,7 @@ staffRoutes.post('/gift/:id/use', async (c) => {
   const giftId = c.req.param('id');
   const reward = await app.repo.findRewardById(giftId);
   if (!reward) throw new HttpError(404, 'not_found', 'Подарок не найден');
+  assertNotOwnCard(app, caller, await ensureClient(app, reward.clientId));
   const staff = actingStaff(caller);
   const key = `gift-use:${giftId}`;
   const res = await app.service.execute(reward.clientId, ({ rules, state, now }): Outcome => {
@@ -239,7 +253,7 @@ staffRoutes.post('/gift/:id/use', async (c) => {
     // Repeated tap on "выдать" → idempotent success.
     if (r?.status === 'used' && r.usedIdempotencyKey === key) return { ...emptyOutcome(), replayed: true };
     return redeem(rules, state, { idempotencyKey: key, staffId: staff.id, rewardId: giftId, reason: 'подарок выдан' }, now);
-  });
+  }, { keys: [key], rewardIds: [giftId] });
   const body: UseGiftResultDTO = { client: await summaryFor(app, res.rules, reward.clientId, res.now, res.state) };
   return c.json(body);
 });

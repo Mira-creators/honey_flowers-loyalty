@@ -9,6 +9,7 @@ import type {
   NoteDTO,
   OperationDTO,
   OwnerClientDTO,
+  OwnerHistoryPageDTO,
 } from '@honey/contracts';
 import { dayNumberFromKey, keyFromDayNumber, localDateKey, manualAdjust, type ClientState, type LoyaltyRules } from '@honey/core';
 import { maskPhone, nationalPart, phoneDigits, type ClientProfile } from '@honey/service';
@@ -20,7 +21,8 @@ import { CLIENT_SORTS, type ClientListQuery, type ClientListRow } from '../db/d1
 import { DAY_MS } from '../lib/clock.js';
 import { computeClientStats, sameStats } from '../lib/clientStats.js';
 import { csvLine, csvResponse, tashkentMinute } from '../lib/csv.js';
-import { actorIds, clientSummary, history, tashkentDayStartIso, viewState } from '../lib/dto.js';
+import { clientSummary, tashkentDayStartIso } from '../lib/dto.js';
+import { decodeHistoryCursor, encodeHistoryCursor, HISTORY_PAGE, historyActorIds, historyItems } from '../lib/history.js';
 import { HttpError } from '../lib/errors.js';
 import { translateWarning } from '../lib/summary.js';
 
@@ -177,12 +179,15 @@ ownerClientRoutes.get('/clients', async (c) => {
 // ------------------------------------------------------------ card
 
 async function ownerClient(app: AppContext, rules: LoyaltyRules, client: ClientProfile, note: string | null, state: ClientState, now: Date): Promise<OwnerClientDTO> {
-  const names = await app.repo.actorNames(actorIds(state));
-  const summary = clientSummary(rules, client, state, now, names);
+  // History: the newest page (50) from SQL; older pages via GET /clients/:id/history?cursor=…
+  const { historyRows } = await app.repo.loadStateWithHistory(client.id, { now, rules }, state, HISTORY_PAGE + 1);
+  const page = historyRows.slice(0, HISTORY_PAGE);
+  const names = await app.repo.actorNames(historyActorIds(page));
+  const summary = clientSummary(rules, client, state, now, historyItems(page, names));
+  const last = page[page.length - 1];
   return {
     ...summary,
-    // The owner sees the whole history, not only the last 50 items.
-    history: history(viewState(rules, state, now), names, 10_000),
+    historyNext: historyRows.length > HISTORY_PAGE && last ? encodeHistoryCursor({ at: String(last.at), id: String(last.id) }) : null,
     phone: client.phone,
     telegramId: client.telegramId,
     registeredAt: client.createdAt.toISOString(),
@@ -192,11 +197,29 @@ async function ownerClient(app: AppContext, rules: LoyaltyRules, client: ClientP
   };
 }
 
+/** GET /clients/:id/history?cursor=… — the next page (50) of a client's history, newest first. */
+ownerClientRoutes.get('/clients/:id/history', async (c) => {
+  const app = c.get('app');
+  const raw = c.req.query('cursor');
+  const before = raw ? decodeHistoryCursor(raw) : null;
+  if (raw && !before) throw new HttpError(400, 'validation', 'Неверный курсор истории');
+  const client = await app.repo.findClientById(c.req.param('id'));
+  if (!client) throw new HttpError(404, 'not_found', 'Клиент не найден');
+  const rows = await app.repo.historyPage(client.id, before, HISTORY_PAGE + 1);
+  const page = rows.slice(0, HISTORY_PAGE);
+  const last = page[page.length - 1];
+  const body: OwnerHistoryPageDTO = {
+    items: historyItems(page, await app.repo.actorNames(historyActorIds(page))),
+    next: rows.length > HISTORY_PAGE && last ? encodeHistoryCursor({ at: String(last.at), id: String(last.id) }) : null,
+  };
+  return c.json(body);
+});
+
 ownerClientRoutes.get('/clients/:id', async (c) => {
   const app = c.get('app');
   const now = app.now();
   const { rules } = await app.repo.getActiveRules(now);
-  const card = await app.repo.loadClientCard(c.req.param('id'));
+  const card = await app.repo.loadClientCard(c.req.param('id'), { now, rules });
   if (!card) throw new HttpError(404, 'not_found', 'Клиент не найден');
   // Self-healing summary: normally identical; rewritten only if it drifted (and nobody wrote meanwhile).
   const fresh = computeClientStats(rules, card.versioned.state, now);
@@ -226,8 +249,10 @@ ownerClientRoutes.post('/clients/:id/adjust', async (c) => {
   const staff = actingStaff(caller);
   // Ledger idempotency keys are global: scope the caller's key to this client.
   const key = `adjust:${id}:${body.idempotencyKey ?? crypto.randomUUID()}`;
-  const res = await app.service.execute(id, ({ rules: r, state, now }) =>
-    manualAdjust(r, state, { idempotencyKey: key, staffId: staff.id, amount: body.points, reason: body.reason }, now),
+  const res = await app.service.execute(
+    id,
+    ({ rules: r, state, now }) => manualAdjust(r, state, { idempotencyKey: key, staffId: staff.id, amount: body.points, reason: body.reason }, now),
+    { keys: [key] },
   );
   const out: AdjustResultDTO = {
     client: await ownerClient(app, res.rules, found.client, found.note, res.state, res.now),
@@ -251,14 +276,21 @@ ownerClientRoutes.put('/clients/:id/note', async (c) => {
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
+/** A real calendar day 'YYYY-MM-DD' (rejects 2026-02-31, 2026-13-01 …). */
+export function isCalendarDay(v: string): boolean {
+  if (!DAY_RE.test(v)) return false;
+  const d = new Date(`${v}T00:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === v;
+}
+
 /** Operations range in Tashkent days (inclusive); default: the last 90 days. */
 export function exportRange(now: Date, from?: string | null, to?: string | null): { from: string; to: string; fromIso: string; toIso: string } {
   const today = localDateKey(now, TZ);
   const t = to || today;
   const f = from || keyFromDayNumber(dayNumberFromKey(t) - 89);
-  if (!DAY_RE.test(f) || !DAY_RE.test(t) || Number.isNaN(Date.parse(f)) || Number.isNaN(Date.parse(t))) {
-    throw new HttpError(400, 'validation', 'Даты периода — в формате ГГГГ-ММ-ДД');
-  }
+  if (!DAY_RE.test(f) || !DAY_RE.test(t)) throw new HttpError(400, 'validation', 'Даты периода — в формате ГГГГ-ММ-ДД');
+  // Date.parse is lenient (2026-02-31 → 3 March): a calendar date must round-trip.
+  for (const d of [f, t]) if (!isCalendarDay(d)) throw new HttpError(400, 'validation', `Такой даты нет: ${d}`);
   if (f > t) throw new HttpError(400, 'validation', 'Начало периода позже конца');
   return { from: f, to: t, fromIso: tashkentDayStartIso(f), toIso: tashkentDayStartIso(keyFromDayNumber(dayNumberFromKey(t) + 1)) };
 }
@@ -271,6 +303,7 @@ const KIND_LABEL: Record<OperationDTO['kind'], string> = {
   expire: 'Сгорание мёда',
   manual: 'Корректировка',
   gift_used: 'Подарок выдан',
+  gift_granted: 'Подарок от владельца',
 };
 
 async function* clientLines(app: AppContext, rules: LoyaltyRules): AsyncGenerator<string> {
@@ -363,9 +396,10 @@ ownerClientRoutes.post('/export/link', async (c) => {
  * Mounted in app.ts BEFORE the authenticated /api router. The token is consumed atomically.
  */
 export async function exportByToken(c: Context, app: AppContext, file: string, token: string): Promise<Response> {
-  const link = await app.repo.consumeExportLink(token, app.now());
   const kind = file === 'clients.csv' ? 'clients' : file === 'operations.csv' ? 'operations' : null;
-  if (!link || !kind || link.kind !== kind) {
+  // Consumed only on its own file: opening it on another export path leaves it usable.
+  const link = kind ? await app.repo.consumeExportLink(token, app.now(), kind) : null;
+  if (!link || !kind) {
     return c.text('Ссылка недействительна: она одноразовая и действует 10 минут. Создайте новую в приложении.', 410);
   }
   return exportResponse(app, kind, { from: link.params.from ?? null, to: link.params.to ?? null });

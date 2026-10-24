@@ -24,6 +24,23 @@ export function normalizePhone(raw: string): string | null {
   return null;
 }
 
+/**
+ * Imported clients (old shop base) have a phone but no Telegram account yet. clients.telegram_id
+ * is NOT NULL UNIQUE, so they get a NEGATIVE placeholder derived from the phone digits
+ * (real Telegram user ids are always positive). Claiming replaces it with the real id.
+ */
+export function placeholderTelegramId(phone: string): number {
+  const d = phoneDigits(phone);
+  const n = Number(d);
+  if (!d || !Number.isSafeInteger(n) || n <= 0) throw new Error(`cannot derive a placeholder id from phone ${phone}`);
+  return -n;
+}
+
+/** True for an imported client that no Telegram account has claimed yet. */
+export function isUnlinkedTelegramId(telegramId: number): boolean {
+  return telegramId < 0;
+}
+
 /** "+998901234567" → "+998 90 ••• •• 67". */
 export function maskPhone(phone: string | null): string {
   if (!phone) return '';

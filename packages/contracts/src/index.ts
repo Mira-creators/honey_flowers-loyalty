@@ -15,7 +15,10 @@ export interface ApiError {
   error: {
     code:
       | 'unauthorized' | 'expired' | 'forbidden' | 'not_found' | 'validation'
-      | 'not_registered' | 'insufficient_points' | 'conflict' | 'already_reversed' | 'internal';
+      | 'not_registered' | 'insufficient_points' | 'conflict' | 'already_reversed' | 'internal'
+      | 'self_operation';
+    // 'self_operation' (403): a staff member tried to charge / redeem / hand out a gift on their OWN card
+    // (allowed only for the owner in TEST_MODE).
     // 'expired' (401): Telegram initData is older than the server allows — the app must be
     // closed and reopened from Telegram (initData is refreshed only on reopen).
     message: string; // Russian, safe to show to staff
@@ -33,9 +36,11 @@ export interface GiftDTO {
   status: 'available' | 'used' | 'revoked';
   unlockedAt: string;
   usedAt: string | null;
+  source?: 'grant';         // 'grant' = given by the owner without a purchase (not tied to a cell); absent = honeycomb gift
+  reason?: string;          // owner grant: why ("день рождения")
 }
 
-export type HistoryKind = 'purchase' | 'welcome' | 'redeem' | 'expire' | 'reversal' | 'manual' | 'gift_used';
+export type HistoryKind = 'purchase' | 'welcome' | 'redeem' | 'expire' | 'reversal' | 'manual' | 'gift_used' | 'gift_granted';
 export interface HistoryItemDTO {
   id: string;
   at: string;
@@ -91,6 +96,7 @@ export interface MeDTO {
   telegramId: number;
   firstName: string;
   role: Role;                   // effective role (in TEST_MODE the tester can switch it)
+  /** Show «🧪 Тест»: TEST_MODE is on AND this caller is a tester (TEST_USERS). False for everyone else. */
   testMode: boolean;
   registered: boolean;          // has a client profile with phone
   client: ClientSummaryDTO | null;
@@ -154,6 +160,11 @@ export interface OperationDTO {
   id: string; at: string; kind: HistoryKind; points: number;
   clientId: string; clientName: string; staffName: string | null;
   purchaseId?: string; purchaseAmount?: number; status?: 'active' | 'reversed';
+  reason?: string;              // reversal / manual adjustment / owner grant reason
+  /** Active purchases only: may staff still reverse it (window, gift unused, мёд unspent)? */
+  reversible?: boolean;
+  /** Why not (Russian, shown instead of «Отменить»). */
+  reverseBlocked?: string;
 }
 
 /** GET /api/owner/stats */
@@ -179,6 +190,8 @@ export interface EditableRulesDTO {
   expiryDays: number;
   expiryWarnDays: number[];
   welcomeBonus: number;
+  /** Staff may reverse a purchase only within this many hours (1..720, default 24). */
+  reversalWindowHours: number;
   cells: number;                // 10 fixed for now
   gifts: Record<string, string>; // cell -> gift type
   version: number;
@@ -188,6 +201,23 @@ export interface EditableRulesDTO {
 export interface StaffDTO { id: string; telegramId: number | null; name: string; role: Exclude<Role, 'client'>; active: boolean }
 
 /** GET /api/owner/operations?limit=100 -> OperationDTO[] */
+
+/**
+ * POST /api/owner/clients/:id/grant — owner gives a gift or bonus мёд WITHOUT a purchase.
+ * Idempotent: `Idempotency-Key` header or `idempotencyKey` in the body (8..100 chars); a replay
+ * returns the original result with replayed=true (200), a new grant answers 201.
+ * giftId = a gift type code the rules use on the honeycomb ('card' | 'delivery' | 'disc10' | 'mini' ...).
+ * The client gets the usual Telegram message; the operations journal shows it with the reason.
+ */
+export type OwnerGrantRequest =
+  | { kind: 'gift'; giftId: string; reason: string; idempotencyKey?: string }
+  | { kind: 'honey'; points: number; reason: string; idempotencyKey?: string };
+export interface OwnerGrantResultDTO {
+  replayed: boolean;
+  gift: GiftDTO | null;         // kind=gift
+  points: number;               // kind=honey: мёд credited (0 for a gift)
+  client: ClientSummaryDTO;
+}
 
 /* ---------------- owner: client base ---------------- */
 
@@ -233,9 +263,17 @@ export interface ClientListDTO {
 
 /**
  * GET /api/owner/clients/:id → OwnerClientDTO: the client card as the client sees it
- * (ClientSummaryDTO, full history) plus what only staff may see.
+ * (ClientSummaryDTO, newest 50 history items + cursor) plus what only staff may see.
  */
+/** GET /api/owner/clients/:id/history?cursor= → the next page of a client's history (50, newest first). */
+export interface OwnerHistoryPageDTO {
+  items: HistoryItemDTO[];
+  next: string | null;
+}
+
 export interface OwnerClientDTO extends ClientSummaryDTO {
+  /** history = the newest 50 items; more: GET /api/owner/clients/:id/history?cursor=<historyNext> */
+  historyNext?: string | null;
   phone: string | null;         // unmasked, E.164
   telegramId: number;
   registeredAt: string;
@@ -281,3 +319,22 @@ export interface TestRunExpiryDTO { expired: number; warned: number; checked: nu
 /** POST /api/test/reset-me — deletes the caller's client data (to replay onboarding) */
 /** POST /api/test/register { phone, name } — browser-only registration shortcut */
 export interface TestRegisterRequest { phone: string; name: string }
+
+/* ---------------- Owner web console (console.html): DTOs + import helpers ---------------- */
+export * from './console.js';
+/**
+ * POST /api/test/demo-seed { chunk } — fills the program with ~250 realistic demo clients, a few
+ * per request (call chunk 0, 1, … until finished). Deterministic and idempotent; demo clients are
+ * never messaged. POST /api/test/demo-clear — removes exactly the demo records.
+ */
+export interface TestDemoSeedRequest { chunk: number }
+export interface TestDemoSeedDTO {
+  chunk: number;
+  chunks: number;               // total number of chunks
+  total: number;                // demo clients in the full set
+  done: number;                 // demo clients that exist after this chunk (progress)
+  created: number;              // clients created by this call (0 on a re-run)
+  finished: boolean;
+  nextChunk: number | null;
+}
+export interface TestDemoClearDTO { clients: number; staff: number }

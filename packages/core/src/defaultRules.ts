@@ -32,6 +32,9 @@ export const defaultRules: LoyaltyRules = {
   maxRedeemPct: 50,
   // ours (antifraud / typo guard): a single purchase cannot exceed this amount.
   maxPurchaseAmount: 100_000_000,
+  // Owner decision: a purchase can be reversed by staff only within N hours (and only if its мёд
+  // and gift are unused), see commands/reverse.ts.
+  reversalWindowHours: 24,
   // Q11: may the 10% discount and мёд be used in the same order.
   allowDiscountWithPoints: false,
   // Q12: welcome bonus at registration, сум (0 = no bonus).

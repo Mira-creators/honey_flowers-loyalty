@@ -2,10 +2,14 @@ import type { ClientSummaryDTO, MeDTO, OperationDTO } from '@honey/contracts';
 import type { ClientState, LoyaltyRules } from '@honey/core';
 import type { Caller } from '../auth.js';
 import type { AppContext } from '../context.js';
-import { actorIds, clientSummary, publicRules } from './dto.js';
-import { HttpError } from './errors.js';
+import { clientSummary, publicRules } from './dto.js';
+import { historyActorIds, historyItems } from './history.js';
+import { HttpError, reversalBlockMessage } from './errors.js';
 
-/** Summary of a client as of `now` (loads state unless given). */
+/**
+ * Summary of a client as of `now`: the BOUNDED state (unless given) and the last 50 history items
+ * in ONE read batch, then the staff names of those items. Cost independent of the history length.
+ */
 export async function summaryFor(
   app: AppContext,
   rules: LoyaltyRules,
@@ -15,8 +19,9 @@ export async function summaryFor(
 ): Promise<ClientSummaryDTO> {
   const client = await app.repo.findClientById(clientId);
   if (!client) throw new HttpError(404, 'not_found', 'Клиент не найден');
-  const s = state ?? (await app.repo.loadClientState(clientId)).state;
-  return clientSummary(rules, client, s, now, await app.repo.actorNames(actorIds(s)));
+  const { state: s, historyRows } = await app.repo.loadStateWithHistory(clientId, { now, rules }, state);
+  const names = await app.repo.actorNames(historyActorIds(historyRows));
+  return clientSummary(rules, client, s, now, historyItems(historyRows, names));
 }
 
 export async function buildMe(app: AppContext, caller: Caller): Promise<MeDTO> {
@@ -29,7 +34,8 @@ export async function buildMe(app: AppContext, caller: Caller): Promise<MeDTO> {
     telegramId: caller.telegramId,
     firstName: caller.firstName,
     role: caller.role,
-    testMode: app.testMode,
+    // «🧪 Тест» only for testers (TEST_MODE + TEST_USERS); everyone else sees the production app.
+    testMode: caller.tester,
     registered: !!client?.phone,
     client: summary,
     rules: publicRules(rules),
@@ -40,6 +46,8 @@ export async function buildMe(app: AppContext, caller: Caller): Promise<MeDTO> {
 }
 
 export async function operationsFor(app: AppContext, limit: number): Promise<OperationDTO[]> {
+  const now = app.now();
+  const { rules } = await app.repo.getActiveRules(now);
   const rows = await app.repo.operations(limit);
   const names = await app.repo.actorNames(rows.map((r) => (r.staff_id === null ? null : String(r.staff_id))));
   return rows.map((r) => {
@@ -55,6 +63,18 @@ export async function operationsFor(app: AppContext, limit: number): Promise<Ope
     if (r.purchase_id !== null) op.purchaseId = String(r.purchase_id);
     if (r.purchase_amount !== null) op.purchaseAmount = Number(r.purchase_amount);
     if (r.status !== null) op.status = String(r.status) as 'active' | 'reversed';
+    if (r.reason !== null && r.reason !== undefined && String(r.reason)) op.reason = String(r.reason);
+    // Item 8: may staff still reverse this purchase? (the server checks again on «Отменить»)
+    if (op.kind === 'purchase' && op.status === 'active') {
+      const hours = rules.reversalWindowHours;
+      const block =
+        now.getTime() - Date.parse(op.at) > hours * 3_600_000 ? reversalBlockMessage('REVERSAL_WINDOW_EXPIRED', hours)
+        : Number(r.rev_gift_used ?? 0) === 1 ? reversalBlockMessage('REVERSAL_GIFT_USED')
+        : Number(r.rev_balance ?? 0) < 0 ? reversalBlockMessage('REVERSAL_POINTS_SPENT')
+        : null;
+      op.reversible = block === null;
+      if (block) op.reverseBlocked = block;
+    }
     return op;
   });
 }

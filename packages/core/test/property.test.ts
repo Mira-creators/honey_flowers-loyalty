@@ -319,10 +319,23 @@ function runSequence(seed: number, family: 'A' | 'B', maxOps: number): Violation
     const welcome = state.ledger.filter((e) => e.type === 'welcome').reduce((s, e) => s + e.amount, 0);
     const standalone = state.ledger.filter((e) => e.type === 'redeem' && e.purchaseId === null).reduce((s, e) => s + e.amount, 0);
     const order = [...state.purchases.filter((p) => p.status === 'active')].sort(() => rnd() - 0.5);
+    // Cleanup ignores the reversal window (engine mechanics); a reversal the business rules refuse
+    // (a gift of the purchase was used / its мёд spent) ends the cleanup: the I14 checks need all.
+    const noWindow = { ...rules, reversalWindowHours: Number.MAX_SAFE_INTEGER };
+    let blocked = false;
     for (const p of order) {
       ops.push(`reverse ${p.id} (final cleanup) @${now.toISOString()}`);
-      commit(reversePurchase(rules, state, { purchaseId: p.id, reason: 'cleanup', staffId: 's' }, now));
+      try {
+        commit(reversePurchase(noWindow, state, { purchaseId: p.id, reason: 'cleanup', staffId: 's' }, now));
+      } catch (e) {
+        if (e instanceof LoyaltyError && e.code.startsWith('REVERSAL_')) {
+          blocked = true;
+          break;
+        }
+        throw e;
+      }
     }
+    if (blocked) return out;
     const bal = balanceFromLedger(state.ledger);
     if (bal !== welcome + standalone) fail('I14a reversing every purchase does not restore the balance', `balance ${bal}, expected ${welcome + standalone}`);
     const pos = cardPosition(rules, state);

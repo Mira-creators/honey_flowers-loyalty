@@ -1,8 +1,10 @@
 import type {
   MeDTO, SetLangRequest, StaffClientLookupDTO, PurchasePreviewRequest, PurchasePreviewDTO, PurchaseRequest,
   PurchaseResultDTO, ReverseResultDTO, UseGiftResultDTO, OperationDTO, OwnerStatsDTO, EditableRulesDTO, StaffDTO,
-  Role, TestRunExpiryDTO, ApiError, ClientListDTO, ClientSort, ClientStatus, OwnerClientDTO, AdjustRequest, AdjustResultDTO,
-  NoteDTO, ExportLinkRequest, ExportLinkDTO,
+  WebLinkDTO,
+  Role, TestRunExpiryDTO, ApiError, OwnerGrantRequest, OwnerGrantResultDTO, TestDemoSeedDTO, TestDemoClearDTO,
+  ClientListDTO, ClientSort, ClientStatus, OwnerClientDTO, AdjustRequest, AdjustResultDTO,
+  NoteDTO, ExportLinkRequest, ExportLinkDTO, OwnerHistoryPageDTO,
 } from '@honey/contracts';
 import { tg } from './tg';
 
@@ -35,8 +37,8 @@ export class ApiErr extends Error {
   constructor(public code: string, message: string, public status: number) { super(message); }
 }
 
-async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const headers: Record<string, string> = {};
+async function req<T>(method: string, path: string, body?: unknown, extraHeaders: Record<string, string> = {}): Promise<T> {
+  const headers: Record<string, string> = { ...extraHeaders };
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   if (tg.inTelegram) headers.Authorization = 'tma ' + tg.initData();
   else {
@@ -77,12 +79,17 @@ export const api = {
   addStaff: (phoneOrTelegramId: string, role: StaffDTO['role']) => req<StaffDTO>('POST', '/api/owner/staff', { phoneOrTelegramId, role }),
   removeStaff: (id: string) => req<unknown>('DELETE', `/api/owner/staff/${encodeURIComponent(id)}`),
   operations: (limit = 100) => req<OperationDTO[]>('GET', `/api/owner/operations?limit=${limit}`),
+  webLink: () => req<WebLinkDTO>('POST', '/api/owner/web-link', {}),
+  /** Gift or bonus мёд without a purchase; the same key replays the original result. */
+  grant: (clientId: string, b: OwnerGrantRequest, idempotencyKey: string) =>
+    req<OwnerGrantResultDTO>('POST', `/api/owner/clients/${encodeURIComponent(clientId)}/grant`, b, { 'Idempotency-Key': idempotencyKey }),
   clients: (p: { q?: string; status?: ClientStatus | ''; sort?: ClientSort; cursor?: string | null; limit?: number }) => {
     const qs = new URLSearchParams();
     for (const [k, v] of Object.entries(p)) if (v !== undefined && v !== null && v !== '') qs.set(k, String(v));
     return req<ClientListDTO>('GET', '/api/owner/clients?' + qs.toString());
   },
   client: (id: string) => req<OwnerClientDTO>('GET', `/api/owner/clients/${encodeURIComponent(id)}`),
+  clientHistory: (id: string, cursor: string) => req<OwnerHistoryPageDTO>('GET', `/api/owner/clients/${encodeURIComponent(id)}/history?cursor=${encodeURIComponent(cursor)}`),
   adjust: (id: string, b: AdjustRequest) => req<AdjustResultDTO>('POST', `/api/owner/clients/${encodeURIComponent(id)}/adjust`, b),
   note: (id: string, note: string) => req<NoteDTO>('PUT', `/api/owner/clients/${encodeURIComponent(id)}/note`, { note }),
   exportLink: (b: ExportLinkRequest) => req<ExportLinkDTO>('POST', '/api/owner/export/link', b),
@@ -93,6 +100,8 @@ export const api = {
     runExpiry: () => req<TestRunExpiryDTO>('POST', '/api/test/run-expiry', {}),
     resetMe: () => req<unknown>('POST', '/api/test/reset-me', {}),
     register: (phone: string, name: string) => req<unknown>('POST', '/api/test/register', { phone, name }),
+    demoSeed: (chunk: number) => req<TestDemoSeedDTO>('POST', '/api/test/demo-seed', { chunk }),
+    demoClear: () => req<TestDemoClearDTO>('POST', '/api/test/demo-clear', {}),
   },
 };
 

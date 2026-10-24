@@ -81,16 +81,26 @@ export interface Reward {
   usedIdempotencyKey?: string | null;
   unlockedAt: Date;
   usedAt: Date | null;
+  /**
+   * Owner grant without a purchase (commands/grant.ts): who granted the gift
+   * and why. Absent / null for gifts unlocked on the honeycomb.
+   */
+  grantedBy?: string | null;
+  grantReason?: string | null;
 }
 
-export type CardMoveReason = 'purchase' | 'expiry_reset';
+/**
+ * 'import': the owner imported the old client base with "past purchases count on the card":
+ * the bee is placed on a cell without unlocking the gifts it passed (no purchase attached).
+ */
+export type CardMoveReason = 'purchase' | 'expiry_reset' | 'import';
 
 /** One step of the honeycomb card. The latest move is the current position. */
 export interface CardMove {
   clientId: string;
   purchaseId: string | null;
   cycle: number;
-  /** 1..cells for purchases; 0 for a reset to an empty card. */
+  /** 1..cells for purchases and imports; 0 for a reset to an empty card. */
   cell: number;
   reason: CardMoveReason;
   createdAt: Date;
@@ -167,6 +177,34 @@ export interface ClientState {
   rewards: Reward[];
   /** Dedupe keys of notifications already sent (e.g. expiry warnings). */
   sentNotificationKeys: string[];
+  /**
+   * Storage may load only a BOUNDED part of a long history (apps/worker: the latest purchases, the
+   * rows a command needs). `folded` sums up what is NOT in the arrays above, so every derived value
+   * stays exact: balance (balanceOf), the level metric (deriveLevel) and the active purchase count.
+   * Absent = the arrays hold the whole history.
+   */
+  folded?: FoldedHistory;
+}
+
+/** Aggregates of the facts a bounded state does not carry (see ClientState.folded). */
+export interface FoldedHistory {
+  /** Σ amount of the ledger entries not in `ledger`. */
+  ledgerSum: Uzs;
+  /** Active purchases not in `purchases`. */
+  activeCount: number;
+  /**
+   * Active purchases not in `purchases` created at/after the level override's setAt (all of them
+   * without an override): their amount sum and count — what deriveLevel adds (no level window).
+   */
+  levelSum: Uzs;
+  levelCount: number;
+  /** setAt of the override `levelSum` / `levelCount` were computed for (null = no override). */
+  levelSince: Date | null;
+  /**
+   * Available gifts not in `rewards` (display / counts only: storage loads every available gift
+   * when an expiry may reset the card, and any gift a command uses by id).
+   */
+  availableGifts?: number;
 }
 
 export function emptyClientState(clientId: string, registeredAt: Date): ClientState {

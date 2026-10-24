@@ -57,6 +57,7 @@ async function expectStatsConsistent(ids: string[]) {
     expect({
       balance: Number(row!.balance), spent: Number(row!.spent), purchasesCount: Number(row!.purchases_count), lastPurchaseAt: row!.last_purchase_at,
       levelId: row!.level_id, giftsAvailable: Number(row!.gifts_available), activityAt: row!.activity_at, expiresOn: row!.expires_on,
+      levelSum: Number(row!.level_sum), levelCount: Number(row!.level_count),
     }, id).toEqual(want);
   }
 }
@@ -169,7 +170,7 @@ describe('client_stats stays consistent with the ledger', () => {
     const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
     const ids: string[] = [];
     for (let i = 0; i < 20; i++) {
-      if (i === 10) expect((await call('/api/owner/rules', { user: OWNER, method: 'PUT', body: { ...rules, welcomeBonus: 5000 } })).status).toBe(200);
+      if (i === 10) expect((await call('/api/owner/rules', { user: OWNER, method: 'PUT', body: { ...rules, welcomeBonus: 5000, reversalWindowHours: 720 } })).status).toBe(200);
       ids.push((await register(T + 500 + i)).client!.id);
     }
     const purchases = new Map<string, string[]>();
@@ -181,7 +182,8 @@ describe('client_stats stays consistent with the ledger', () => {
           purchases.set(id, [...(purchases.get(id) ?? []), res.purchaseId]);
         } else if (r < 0.65 && purchases.get(id)?.length) {
           const pid = purchases.get(id)!.pop()!;
-          expect((await call(`/api/staff/purchase/${pid}/reverse`, { user: FLORIST, body: { reason: 'тест отмены' } })).status).toBe(200);
+          // item 8: refused (409) when the purchase's мёд was spent; the window is 720 h here
+          expect([200, 409]).toContain((await call(`/api/staff/purchase/${pid}/reverse`, { user: FLORIST, body: { reason: 'тест отмены' } })).status);
         } else if (r < 0.8) {
           expect((await adjust(id, rnd() < 0.7 ? 3000 : -1000, 'перенос базы')).status).toBe(200);
         } else {
@@ -208,10 +210,13 @@ describe('client_stats stays consistent with the ledger', () => {
   it('a drifted row is healed when the card is opened; a rules change recomputes level and expiry', async () => {
     const id = (await register(T + 601)).client!.id;
     await buy(FLORIST, id, 2_500_000);
-    await testEnv.DB.prepare(`UPDATE client_stats SET balance = 1, level_id = 'bee' WHERE client_id = ?`).bind(id).run();
-    expect((await list()).items[0]!.balance).toBe(1);
+    // Derived fields heal when the card is opened. (The totals — balance, counts, level sums — are
+    // written in the same batch as every fact and read by the bounded load; qa/ invariants verify them.)
+    await testEnv.DB.prepare(`UPDATE client_stats SET level_id = 'bee', expires_on = '2000-01-01' WHERE client_id = ?`).bind(id).run();
+    expect((await list()).items[0]!.levelId).toBe('bee');
     await call(`/api/owner/clients/${id}`, { user: OWNER });
     expect((await list()).items[0]).toMatchObject({ balance: 25_000, levelId: 'honey' });
+    expect((await list()).items[0]!.expiresOn).not.toBe('2000-01-01');
 
     const rules = await json<EditableRulesDTO>(call('/api/owner/rules', { user: OWNER }));
     rules.levels[1]!.from = 3_000_000; // client drops back to "bee" thresholds-wise

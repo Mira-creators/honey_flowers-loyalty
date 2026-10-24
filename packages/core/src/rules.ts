@@ -71,6 +71,11 @@ export const loyaltyRulesSchema = z
     maxRedeemPct: pct,
     /** Largest purchase amount (UZS) the engine accepts; protects against typos. Defaults for rules stored before it existed. */
     maxPurchaseAmount: uzs.positive().default(100_000_000),
+    /**
+     * Staff may reverse a purchase only within this many hours of it (owner decision: a reversal
+     * corrects a mistake at the till, it is not a refund). 1..720; rules stored before it existed get 24.
+     */
+    reversalWindowHours: z.number().int().min(1).max(720).default(24),
     /** May a discount reward (discount_pct) be combined with points in one order? */
     allowDiscountWithPoints: z.boolean(),
     /** Points credited once at registration. 0 disables. */

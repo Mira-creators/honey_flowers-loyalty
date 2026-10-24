@@ -1,5 +1,6 @@
 import {
   defaultRules,
+  localDateKey,
   LoyaltyError,
   parseRules,
   type CardMove,
@@ -16,6 +17,7 @@ import {
   phoneDigits,
   PhoneTakenError,
   type ClientProfile,
+  type LoadHint,
   type NewClient,
   type Repository,
   type RulesVersion,
@@ -36,6 +38,19 @@ import {
  */
 
 import { computeClientStats, type ClientStats } from '../lib/clientStats.js';
+import { assembleBounded, boundedStatements } from './stateLoader.js';
+import { HISTORY_PAGE, historyStmt, type HistoryCursor } from '../lib/history.js';
+import { NEXT_CHECK_CHUNK, nextCheckOn, nextChecksSql } from '../lib/expirySchedule.js';
+import {
+  addStmt,
+  byIds,
+  contributionStmts,
+  invalidateBuyersStmt,
+  ledgerStmts,
+  purchaseContribution,
+  rewardsContribution,
+  tashkentDay,
+} from '../lib/statsDaily.js';
 
 type Row = Record<string, unknown>;
 
@@ -67,6 +82,8 @@ export interface ClientContact {
   telegramId: number;
   language: string;
   name: string | null;
+  /** Demo client (TEST_MODE seeding): has no real chat, never messaged. */
+  demo: boolean;
 }
 
 /** Filters of the owner's client list (routes/owner.ts builds them from the query string). */
@@ -148,6 +165,8 @@ function statsFromRow(r: Row): ClientStats {
     giftsAvailable: num(r.gifts_available),
     activityAt: String(r.activity_at),
     expiresOn: String(r.expires_on),
+    levelSum: num(r.level_sum ?? 0),
+    levelCount: num(r.level_count ?? 0),
   };
 }
 
@@ -173,6 +192,7 @@ function clientFromRow(r: Row): ClientProfile {
     language: String(r.language ?? 'ru'),
     consentAt: dateOrNull(r.consent_at),
     createdAt: date(r.created_at),
+    ...(num(r.demo ?? 0) === 1 ? { demo: true } : {}),
   };
 }
 
@@ -256,6 +276,7 @@ function rewardFromRow(r: Row): Reward {
     usedIdempotencyKey: str(r.used_idempotency_key),
     unlockedAt: date(r.unlocked_at),
     usedAt: dateOrNull(r.used_at),
+    ...(r.granted_by !== null && r.granted_by !== undefined ? { grantedBy: String(r.granted_by), grantReason: str(r.grant_reason) } : {}),
   };
 }
 
@@ -315,11 +336,18 @@ export class D1Repository implements Repository {
     return Number.isFinite(v) ? Math.min(Math.max(v, 0), D1Repository.MAX_CLOCK_OFFSET_DAYS) : 0;
   }
 
-  /** TEST_MODE: set the clock offset; every client goes back to the daily job's queue. */
+  /**
+   * TEST_MODE: set the clock offset. "today" moved, so every client's next_check_on is recomputed in
+   * SQL for the new today (overdue ones become due today) in the same batch.
+   */
   async setClockOffsetDays(days: number): Promise<void> {
+    const { rules } = await this.getActiveRules();
+    const today = localDateKey(new Date(Date.now() + days * 86_400_000), rules.timezone);
     await this.db.batch([
       this.setSettingStmt('clock_offset_days', String(days)),
-      this.db.prepare('UPDATE clients SET next_check_on = NULL WHERE next_check_on IS NOT NULL'),
+      ...(await this.nextChecksStmts(rules, today)),
+      // "today" moved: cached distinct buyers of "past" windows may now include purchases to come.
+      invalidateBuyersStmt(this.db),
     ]);
   }
 
@@ -369,14 +397,15 @@ export class D1Repository implements Repository {
    * version id already exists (two owners saving at once).
    */
   async createRulesVersion(rules: LoyaltyRules, createdBy: string | null, now: Date): Promise<void> {
+    const recompute = await this.nextChecksStmts(rules, localDateKey(now, rules.timezone));
     try {
       await this.db.batch([
         this.db
           .prepare('INSERT INTO rules_versions (id, rules, active_from, created_by, created_at) VALUES (?, ?, ?, ?, ?)')
           .bind(rules.version, JSON.stringify(rules), iso(now), createdBy, iso(new Date())),
         this.setSettingStmt('rules_version', String(rules.version)),
-        // Expiry days / warning days may have changed: every client is re-checked by the next daily run.
-        this.db.prepare('UPDATE clients SET next_check_on = NULL WHERE next_check_on IS NOT NULL'),
+        // Expiry days / warning days may have changed: recompute every client's next check (set-based).
+        ...recompute,
         // client_stats: level thresholds / expiry days may have changed (only changed rows are written).
         ...this.statsRulesStmts(rules),
       ]);
@@ -385,6 +414,22 @@ export class D1Repository implements Repository {
       throw e;
     }
     this.rulesCache = null;
+  }
+
+  /**
+   * Recompute clients.next_check_on of EVERY client for these rules and this Tashkent `today`, in SQL
+   * (lib/expirySchedule.ts nextChecksSql), one statement per NEXT_CHECK_CHUNK rowids: the caller puts
+   * them into its batch. One extra query (max rowid).
+   */
+  async nextChecksStmts(rules: LoyaltyRules, today: string): Promise<D1PreparedStatement[]> {
+    const max = Number((await this.db.prepare('SELECT COALESCE(MAX(rowid), 0) AS m FROM clients').first<{ m: number }>())?.m ?? 0);
+    const out: D1PreparedStatement[] = [];
+    const json = JSON.stringify(rules);
+    for (let lo = 0; lo < max || out.length === 0; lo += NEXT_CHECK_CHUNK) {
+      out.push(this.db.prepare(nextChecksSql('?1', '?2', 'clients.rowid > ?3 AND clients.rowid <= ?4')).bind(json, today, lo, lo + NEXT_CHECK_CHUNK));
+      if (lo + NEXT_CHECK_CHUNK >= max) break;
+    }
+    return out;
   }
 
   // ---------------------------------------------------------------- telegram users
@@ -487,6 +532,7 @@ export class D1Repository implements Repository {
       clientId: id, registeredAt: input.createdAt, levelOverride: null, purchases: [], ledger: [], cardMoves: [], rewards: [], sentNotificationKeys: [],
     };
     const stats = computeClientStats(rules, empty, input.createdAt);
+    const nextCheck = nextCheckOn(rules, empty, input.createdAt);
     for (let attempt = 0; attempt < 15; attempt++) {
       const digits = attempt < 6 ? 4 : attempt < 11 ? 5 : 6;
       const code = `HF${randomDigits(digits)}`;
@@ -494,11 +540,13 @@ export class D1Repository implements Repository {
         await this.db.batch([
           this.db
             .prepare(
-              `INSERT INTO clients (id, telegram_id, code, phone, name, language, consent_at, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+              `INSERT INTO clients (id, telegram_id, code, phone, name, language, consent_at, created_at, next_check_on)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             )
-            .bind(id, input.telegramId, code, input.phone, input.name, input.language === 'uz' ? 'uz' : 'ru', isoOrNull(input.consentAt), iso(input.createdAt)),
+            .bind(id, input.telegramId, code, input.phone, input.name, input.language === 'uz' ? 'uz' : 'ru', isoOrNull(input.consentAt), iso(input.createdAt), nextCheck),
           this.statsUpsertStmt(id, stats, input.createdAt),
+          // stats_daily (migration 0007): a client registered through Telegram is "new" on that day.
+          addStmt(this.db, tashkentDay(input.createdAt), { new_clients: 1 })!,
         ]);
         return (await this.findClientById(id))!;
       } catch (e) {
@@ -540,9 +588,40 @@ export class D1Repository implements Repository {
     return c;
   }
 
+  /**
+   * A Telegram account takes over a client imported from the old base (migrations/0005):
+   * the negative placeholder telegram_id becomes the real one, nothing else moves. Atomic:
+   * only succeeds while the row still holds that placeholder.
+   */
+  async claimClient(
+    clientId: string,
+    placeholderTelegramId: number,
+    patch: { telegramId: number; name: string | null; language: string; consentAt: Date },
+  ): Promise<ClientProfile | null> {
+    try {
+      const r = await this.db
+        .prepare(
+          `UPDATE clients SET telegram_id = ?1, name = COALESCE(name, ?2), language = ?3, consent_at = COALESCE(consent_at, ?4)
+           WHERE id = ?5 AND telegram_id = ?6 AND telegram_id < 0
+             AND demo = 0                                                              -- never a demo client (also negative ids)
+             AND EXISTS (SELECT 1 FROM client_imports i WHERE i.client_id = clients.id) -- only a client created by a base import
+           RETURNING *`,
+        )
+        .bind(patch.telegramId, patch.name, patch.language === 'uz' ? 'uz' : 'ru', iso(patch.consentAt), clientId, placeholderTelegramId)
+        .first<Row>();
+      return r ? clientFromRow(r) : null;
+    } catch (e) {
+      if (isUniqueViolation(e, 'clients.telegram_id')) return null; // this Telegram account got its own card meanwhile
+      throw e;
+    }
+  }
+
   /** TEST_MODE: remove a client with all its facts (ledger delete guard lifted inside the batch). */
   async deleteClient(id: string): Promise<void> {
     await this.db.batch([
+      // stats_daily: take everything this client contributed out first (migration 0007).
+      ...contributionStmts(this.db, -1, byIds, [JSON.stringify([id])]),
+      invalidateBuyersStmt(this.db),
       this.db.prepare(`INSERT OR IGNORE INTO maintenance (flag) VALUES ('allow_ledger_delete')`),
       this.db.prepare('DELETE FROM points_ledger WHERE client_id = ?').bind(id),
       this.db.prepare('DELETE FROM card_moves WHERE client_id = ?').bind(id),
@@ -550,8 +629,10 @@ export class D1Repository implements Repository {
       this.db.prepare('DELETE FROM purchases WHERE client_id = ?').bind(id),
       this.db.prepare('DELETE FROM notification_keys WHERE client_id = ?').bind(id),
       this.db.prepare('DELETE FROM notifications_log WHERE client_id = ?').bind(id),
+      this.db.prepare('DELETE FROM outbox WHERE client_id = ?').bind(id),
       this.db.prepare('DELETE FROM important_dates WHERE client_id = ?').bind(id),
       this.db.prepare('DELETE FROM client_versions WHERE client_id = ?').bind(id),
+      this.db.prepare('DELETE FROM client_imports WHERE client_id = ?').bind(id),
       this.db.prepare('DELETE FROM client_stats WHERE client_id = ?').bind(id),
       this.db.prepare('DELETE FROM clients WHERE id = ?').bind(id),
       this.db.prepare(`DELETE FROM maintenance WHERE flag = 'allow_ledger_delete'`),
@@ -565,7 +646,7 @@ export class D1Repository implements Repository {
 
   async clientContacts(ids: string[]): Promise<Map<string, ClientContact>> {
     const clients = await this.getClientsByIds(ids);
-    return new Map(clients.map((c) => [c.id, { id: c.id, telegramId: c.telegramId, language: c.language, name: c.name }]));
+    return new Map(clients.map((c) => [c.id, { id: c.id, telegramId: c.telegramId, language: c.language, name: c.name, demo: c.demo === true }]));
   }
 
   // ---------------------------------------------------------------- staff
@@ -695,8 +776,17 @@ export class D1Repository implements Repository {
     ];
   }
 
-  /** One round trip (a read batch = a consistent snapshot). */
-  async loadClientState(clientId: string): Promise<VersionedState> {
+  /**
+   * One round trip (a read batch = a consistent snapshot). With a `hint` (every command and view does
+   * this) the state is BOUNDED (db/stateLoader.ts, migration 0010): rows read do not grow with the
+   * client's history. Without a hint, or with `full: true`, the whole history (tests, maintenance).
+   */
+  async loadClientState(clientId: string, hint?: LoadHint & { full?: boolean }): Promise<VersionedState> {
+    if (hint && !hint.full) {
+      const got = (await this.loadClientStates([clientId], hint)).get(clientId);
+      if (!got) throw new Error(`client ${clientId} not found`);
+      return got;
+    }
     const [client, ver, purchases, ledger, moves, rewards, keys] = await this.db.batch<Row>(this.stateStatements(clientId));
     const c = client!.results[0];
     if (!c) throw new Error(`client ${clientId} not found`);
@@ -714,44 +804,81 @@ export class D1Repository implements Repository {
   }
 
   /**
-   * Daily job: clients due on `today` (clients.next_check_on IS NULL or <= today),
-   * oldest first, at most `limit`. See migrations/0003 and lib/expirySchedule.ts.
+   * A client's bounded state (unless the caller already has it) and the first history page, in ONE
+   * read batch (lib/history.ts).
+   */
+  async loadStateWithHistory(
+    clientId: string,
+    hint: LoadHint,
+    state?: ClientState,
+    limit = HISTORY_PAGE,
+  ): Promise<{ state: ClientState; historyRows: Row[] }> {
+    if (state) {
+      const { results } = await historyStmt(this.db, clientId, limit).all<Row>();
+      return { state, historyRows: results };
+    }
+    const res = await this.db.batch<Row>([historyStmt(this.db, clientId, limit), ...boundedStatements(this.db, [clientId], hint)]);
+    const { states, missing } = assembleBounded(res.slice(1) as Array<{ results: Row[] }>, D1Repository.ROW_MAPS);
+    const got = states.get(clientId) ?? (missing.length ? await this.loadClientState(clientId) : null);
+    if (!got) throw new Error(`client ${clientId} not found`);
+    return { state: got.state, historyRows: res[0]!.results };
+  }
+
+  /** One page of a client's history (owner card «Показать ещё»). */
+  async historyPage(clientId: string, before: HistoryCursor | null, limit = HISTORY_PAGE): Promise<Row[]> {
+    return (await historyStmt(this.db, clientId, limit, before).all<Row>()).results;
+  }
+
+  private static readonly ROW_MAPS = { purchase: purchaseFromRow, ledger: ledgerFromRow, move: moveFromRow, reward: rewardFromRow, override: overrideFromRow };
+
+  /**
+   * Daily job: clients due on `today` (clients.next_check_on <= today), earliest date first, at most
+   * `limit`. One range of the index clients_next_check_idx: rows read = rows returned. NULL (nothing
+   * pending) is never selected. See lib/expirySchedule.ts.
    */
   async expiryCandidates(today: string, limit: number): Promise<string[]> {
-    // Two index ranges (IS NULL, <= today) instead of an OR, so SQLite never scans the table.
     const { results } = await this.db
-      .prepare(
-        `SELECT id FROM (
-           SELECT id, next_check_on, created_at FROM clients WHERE next_check_on IS NULL
-           UNION ALL
-           SELECT id, next_check_on, created_at FROM clients WHERE next_check_on <= ?
-         ) ORDER BY next_check_on, created_at LIMIT ?`,
-      )
+      .prepare('SELECT id FROM clients WHERE next_check_on <= ? ORDER BY next_check_on LIMIT ?')
       .bind(today, limit)
       .all<{ id: string }>();
     return results.map((r) => r.id);
   }
 
-  /** Daily job: remember when each client must be looked at next (one batch). */
-  async setNextChecks(items: Array<{ clientId: string; on: string }>): Promise<void> {
-    if (!items.length) return;
-    await this.db.batch(items.map((i) => this.db.prepare('UPDATE clients SET next_check_on = ? WHERE id = ?').bind(i.on, i.clientId)));
+  /** Statement: store a client's next check date (NULL = nothing pending); writes only on a change. */
+  nextCheckStmt(clientId: string, on: string | null): D1PreparedStatement {
+    return this.db.prepare('UPDATE clients SET next_check_on = ?1 WHERE id = ?2 AND next_check_on IS NOT ?1').bind(on, clientId);
   }
 
-  /** Bulk load of several clients' states in one round trip (daily job; <= 90 ids per call). */
-  async loadClientStates(ids: string[]): Promise<Map<string, VersionedState>> {
+  /** Daily job: remember when each client must be looked at next (one batch). */
+  async setNextChecks(items: Array<{ clientId: string; on: string | null }>): Promise<void> {
+    if (!items.length) return;
+    await this.db.batch(items.map((i) => this.nextCheckStmt(i.clientId, i.on)));
+  }
+
+  /**
+   * Several clients' states in one round trip (daily job). Ids travel as ONE JSON parameter. With a
+   * `hint` the states are bounded (see loadClientState); a client without a client_stats row (should
+   * not happen) is loaded in full by a second round trip.
+   */
+  async loadClientStates(ids: string[], hint?: LoadHint & { full?: boolean }): Promise<Map<string, VersionedState>> {
+    if (ids.length && hint && !hint.full) {
+      const res = await this.db.batch<Row>(boundedStatements(this.db, ids, hint));
+      const { states, missing } = assembleBounded(res, D1Repository.ROW_MAPS);
+      if (missing.length) for (const [id, v] of await this.loadClientStates(missing)) states.set(id, v);
+      return states;
+    }
     const out = new Map<string, VersionedState>();
     if (!ids.length) return out;
-    if (ids.length > 90) throw new Error('loadClientStates: at most 90 ids per call (D1 bound parameter limit)');
-    const ph = ids.map(() => '?').join(',');
+    const json = JSON.stringify(ids);
+    const ph = 'SELECT value FROM json_each(?1)';
     const [clients, versions, purchases, ledger, moves, rewards, keys] = await this.db.batch<Row>([
-      this.db.prepare(`SELECT id, created_at, level_override, level_override_at, level_override_index FROM clients WHERE id IN (${ph})`).bind(...ids),
-      this.db.prepare(`SELECT client_id, MAX(version) AS v FROM client_versions WHERE client_id IN (${ph}) GROUP BY client_id`).bind(...ids),
-      this.db.prepare(`SELECT * FROM purchases WHERE client_id IN (${ph}) ORDER BY created_at, rowid`).bind(...ids),
-      this.db.prepare(`SELECT * FROM points_ledger WHERE client_id IN (${ph}) ORDER BY rowid`).bind(...ids),
-      this.db.prepare(`SELECT * FROM card_moves WHERE client_id IN (${ph}) ORDER BY id`).bind(...ids),
-      this.db.prepare(`SELECT * FROM rewards WHERE client_id IN (${ph}) ORDER BY rowid`).bind(...ids),
-      this.db.prepare(`SELECT client_id, key FROM notification_keys WHERE client_id IN (${ph}) ORDER BY rowid`).bind(...ids),
+      this.db.prepare(`SELECT id, created_at, level_override, level_override_at, level_override_index FROM clients WHERE id IN (${ph})`).bind(json),
+      this.db.prepare(`SELECT client_id, MAX(version) AS v FROM client_versions WHERE client_id IN (${ph}) GROUP BY client_id`).bind(json),
+      this.db.prepare(`SELECT * FROM purchases WHERE client_id IN (${ph}) ORDER BY created_at, rowid`).bind(json),
+      this.db.prepare(`SELECT * FROM points_ledger WHERE client_id IN (${ph}) ORDER BY rowid`).bind(json),
+      this.db.prepare(`SELECT * FROM card_moves WHERE client_id IN (${ph}) ORDER BY id`).bind(json),
+      this.db.prepare(`SELECT * FROM rewards WHERE client_id IN (${ph}) ORDER BY rowid`).bind(json),
+      this.db.prepare(`SELECT client_id, key FROM notification_keys WHERE client_id IN (${ph}) ORDER BY rowid`).bind(json),
     ]);
     for (const c of clients!.results) {
       const id = String(c.id);
@@ -788,53 +915,38 @@ export class D1Repository implements Repository {
    */
   async saveOutcome(clientId: string, o: Outcome, expectedVersion: number, after?: SavedState): Promise<void> {
     if (o.replayed) return;
+    try {
+      await this.db.batch(this.outcomeStmts(clientId, o, expectedVersion, after));
+    } catch (e) {
+      throw D1Repository.mapWriteError(e);
+    }
+  }
+
+  /** Version conflict → ConcurrencyError, duplicate purchase key → IDEMPOTENCY_CONFLICT, else as is. */
+  static mapWriteError(e: unknown): unknown {
+    if (isVersionConflict(e)) return new ConcurrencyError();
+    if (isUniqueViolation(e, 'purchases.idempotency_key')) {
+      return new LoyaltyError('IDEMPOTENCY_CONFLICT', 'idempotencyKey was already used for another client');
+    }
+    return e;
+  }
+
+  /**
+   * The statements of saveOutcome (version check first). The daily job concatenates several
+   * clients' statements into ONE batch (cron.ts); a conflict then rolls back the whole batch.
+   */
+  outcomeStmts(clientId: string, o: Outcome, expectedVersion: number, after?: SavedState): D1PreparedStatement[] {
     const db = this.db;
     const stmts: D1PreparedStatement[] = [
       db.prepare('INSERT INTO client_versions (client_id, version) VALUES (?, ?)').bind(clientId, expectedVersion + 1),
     ];
-    if (o.purchase) {
-      const p = o.purchase;
-      stmts.push(
-        db
-          .prepare(
-            `INSERT INTO purchases (id, client_id, staff_id, amount, lines, channel, points_redeemed, discount_applied,
-               reward_used_id, idempotency_key, rules_version_id, result, status, reversed_reason, reversed_by, reversed_at, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(id) DO UPDATE SET
-               status = excluded.status, reversed_reason = excluded.reversed_reason,
-               reversed_by = excluded.reversed_by, reversed_at = excluded.reversed_at, result = excluded.result`,
-          )
-          .bind(
-            p.id,
-            clientId,
-            p.staffId,
-            p.amount,
-            JSON.stringify(p.lines),
-            p.channel,
-            p.pointsRedeemed,
-            p.discountApplied,
-            p.rewardUsedId,
-            p.idempotencyKey,
-            p.rulesVersion,
-            p.result ? JSON.stringify(p.result) : null,
-            p.status,
-            p.reversedReason,
-            p.reversedBy,
-            isoOrNull(p.reversedAt),
-            iso(p.createdAt),
-          ),
-      );
-    }
-    for (const e of o.ledger) {
-      stmts.push(
-        db
-          .prepare(
-            `INSERT INTO points_ledger (id, client_id, type, amount, purchase_id, staff_id, reason, idempotency_key, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          )
-          .bind(e.id ?? crypto.randomUUID(), clientId, e.type, e.amount, e.purchaseId, e.staffId, e.reason, e.idempotencyKey ?? null, iso(e.createdAt)),
-      );
-    }
+    // stats_daily (migration 0007): rows whose status may change contribute −before … +after.
+    const purchaseDay = o.purchase ? tashkentDay(o.purchase.createdAt) : null;
+    const giftIds = [...new Set([...o.rewardsUpdated, ...o.rewardsUnlocked].map((r) => r.id))];
+    if (o.purchase) stmts.push(...purchaseContribution(db, -1, o.purchase.id, clientId, purchaseDay!));
+    stmts.push(...rewardsContribution(db, -1, giftIds));
+    if (o.purchase) stmts.push(this.purchaseUpsertStmt(clientId, o.purchase));
+    for (const e of o.ledger) stmts.push(this.ledgerInsertStmt(clientId, e));
     for (const m of o.cardMovesReverted) {
       stmts.push(
         db
@@ -845,13 +957,7 @@ export class D1Repository implements Repository {
           .bind(iso(m.revertedAt ?? new Date(0)), clientId, m.purchaseId, m.cycle, m.cell, m.reason),
       );
     }
-    for (const m of o.cardMoves) {
-      stmts.push(
-        db
-          .prepare('INSERT INTO card_moves (client_id, purchase_id, cycle, cell, reason, reverted_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-          .bind(clientId, m.purchaseId, m.cycle, m.cell, m.reason, isoOrNull(m.revertedAt), iso(m.createdAt)),
-      );
-    }
+    for (const m of o.cardMoves) stmts.push(this.cardMoveInsertStmt(clientId, m));
     for (const r of o.rewardsUpdated) {
       stmts.push(
         db
@@ -859,31 +965,7 @@ export class D1Repository implements Repository {
           .bind(r.status, r.usedInPurchase, r.usedIdempotencyKey ?? null, isoOrNull(r.usedAt), r.id, clientId),
       );
     }
-    for (const r of o.rewardsUnlocked) {
-      stmts.push(
-        db
-          .prepare(
-            `INSERT INTO rewards (id, client_id, cycle, cell, type, value, title, status, unlocked_by_purchase, used_in_purchase,
-               used_idempotency_key, unlocked_at, used_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          )
-          .bind(
-            r.id,
-            clientId,
-            r.cycle,
-            r.cell,
-            r.type,
-            r.value,
-            r.title,
-            r.status,
-            r.unlockedByPurchase,
-            r.usedInPurchase,
-            r.usedIdempotencyKey ?? null,
-            iso(r.unlockedAt),
-            isoOrNull(r.usedAt),
-          ),
-      );
-    }
+    for (const r of o.rewardsUnlocked) stmts.push(this.rewardInsertStmt(clientId, r));
     if (o.levelOverride !== undefined) {
       stmts.push(
         db
@@ -892,26 +974,97 @@ export class D1Repository implements Repository {
       );
     }
     const keyAt = iso(new Date());
-    for (const k of o.notificationKeys) {
-      stmts.push(db.prepare('INSERT OR IGNORE INTO notification_keys (client_id, key, created_at) VALUES (?, ?, ?)').bind(clientId, k, keyAt));
-    }
-    // Any change of the facts that drive expiry (purchase, credit, refund, reset) sends the
-    // client back to the daily job's queue; the job then stores the next relevant date.
-    if (o.purchase || o.ledger.length || o.cardMoves.length || o.levelOverride !== undefined) {
-      stmts.push(db.prepare('UPDATE clients SET next_check_on = NULL WHERE id = ?').bind(clientId));
-    }
+    for (const k of o.notificationKeys) stmts.push(this.notificationKeyInsertStmt(clientId, k, keyAt));
+    // The daily job's schedule (lib/expirySchedule.ts), computed precisely from the state after
+    // this write: the next reminder / expiry date, or NULL if nothing is pending. Without the
+    // after-state the client is simply due today (the job then stores the exact date).
+    if (after) stmts.push(this.nextCheckStmt(clientId, nextCheckOn(after.rules, after.state, after.now)));
+    else stmts.push(db.prepare('UPDATE clients SET next_check_on = ?1 WHERE id = ?2').bind(new Date(Date.now() + 5 * 3_600_000).toISOString().slice(0, 10), clientId));
+    if (o.purchase) stmts.push(...purchaseContribution(db, 1, o.purchase.id, clientId, purchaseDay!), invalidateBuyersStmt(db, purchaseDay!));
+    stmts.push(...rewardsContribution(db, 1, giftIds), ...ledgerStmts(db, o.ledger));
     // Denormalized summary for the owner's client list, in the SAME transaction as the facts.
     if (after) stmts.push(this.statsUpsertStmt(clientId, computeClientStats(after.rules, after.state, after.now), after.now));
     else stmts.push(this.statsFromSqlStmt(clientId));
-    try {
-      await db.batch(stmts);
-    } catch (e) {
-      if (isVersionConflict(e)) throw new ConcurrencyError();
-      if (isUniqueViolation(e, 'purchases.idempotency_key')) {
-        throw new LoyaltyError('IDEMPOTENCY_CONFLICT', 'idempotencyKey was already used for another client');
-      }
-      throw e;
-    }
+    return stmts;
+  }
+
+  // ---------------------------------------------------------------- row statements (saveOutcome, demo seeding)
+
+  /** Insert a purchase, or update its status/result if it exists (reversal). */
+  purchaseUpsertStmt(clientId: string, p: PurchaseRecord): D1PreparedStatement {
+    return this.db
+      .prepare(
+        `INSERT INTO purchases (id, client_id, staff_id, amount, lines, channel, points_redeemed, discount_applied,
+           reward_used_id, idempotency_key, rules_version_id, result, status, reversed_reason, reversed_by, reversed_at, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           status = excluded.status, reversed_reason = excluded.reversed_reason,
+           reversed_by = excluded.reversed_by, reversed_at = excluded.reversed_at, result = excluded.result`,
+      )
+      .bind(
+        p.id,
+        clientId,
+        p.staffId,
+        p.amount,
+        JSON.stringify(p.lines),
+        p.channel,
+        p.pointsRedeemed,
+        p.discountApplied,
+        p.rewardUsedId,
+        p.idempotencyKey,
+        p.rulesVersion,
+        p.result ? JSON.stringify(p.result) : null,
+        p.status,
+        p.reversedReason,
+        p.reversedBy,
+        isoOrNull(p.reversedAt),
+        iso(p.createdAt),
+      );
+  }
+
+  ledgerInsertStmt(clientId: string, e: LedgerEntry): D1PreparedStatement {
+    return this.db
+      .prepare(
+        `INSERT INTO points_ledger (id, client_id, type, amount, purchase_id, staff_id, reason, idempotency_key, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .bind(e.id ?? crypto.randomUUID(), clientId, e.type, e.amount, e.purchaseId, e.staffId, e.reason, e.idempotencyKey ?? null, iso(e.createdAt));
+  }
+
+  cardMoveInsertStmt(clientId: string, m: CardMove): D1PreparedStatement {
+    return this.db
+      .prepare('INSERT INTO card_moves (client_id, purchase_id, cycle, cell, reason, reverted_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .bind(clientId, m.purchaseId, m.cycle, m.cell, m.reason, isoOrNull(m.revertedAt), iso(m.createdAt));
+  }
+
+  rewardInsertStmt(clientId: string, r: Reward): D1PreparedStatement {
+    return this.db
+      .prepare(
+        `INSERT INTO rewards (id, client_id, cycle, cell, type, value, title, status, unlocked_by_purchase, used_in_purchase,
+           used_idempotency_key, unlocked_at, used_at, granted_by, grant_reason)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .bind(
+        r.id,
+        clientId,
+        r.cycle,
+        r.cell,
+        r.type,
+        r.value,
+        r.title,
+        r.status,
+        r.unlockedByPurchase,
+        r.usedInPurchase,
+        r.usedIdempotencyKey ?? null,
+        iso(r.unlockedAt),
+        isoOrNull(r.usedAt),
+        r.grantedBy ?? null,
+        r.grantReason ?? null,
+      );
+  }
+
+  notificationKeyInsertStmt(clientId: string, key: string, at: string): D1PreparedStatement {
+    return this.db.prepare('INSERT OR IGNORE INTO notification_keys (client_id, key, created_at) VALUES (?, ?, ?)').bind(clientId, key, at);
   }
 
   async findPurchaseById(purchaseId: string): Promise<PurchaseRecord | null> {
@@ -934,14 +1087,15 @@ export class D1Repository implements Repository {
   statsUpsertStmt(clientId: string, st: ClientStats, now: Date): D1PreparedStatement {
     return this.db
       .prepare(
-        `INSERT INTO client_stats (client_id, balance, spent, purchases_count, last_purchase_at, level_id, gifts_available, activity_at, expires_on, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO client_stats (client_id, balance, spent, purchases_count, last_purchase_at, level_id, gifts_available, activity_at, expires_on, updated_at, level_sum, level_count)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(client_id) DO UPDATE SET
            balance = excluded.balance, spent = excluded.spent, purchases_count = excluded.purchases_count,
            last_purchase_at = excluded.last_purchase_at, level_id = excluded.level_id, gifts_available = excluded.gifts_available,
-           activity_at = excluded.activity_at, expires_on = excluded.expires_on, updated_at = excluded.updated_at`,
+           activity_at = excluded.activity_at, expires_on = excluded.expires_on, updated_at = excluded.updated_at,
+           level_sum = excluded.level_sum, level_count = excluded.level_count`,
       )
-      .bind(clientId, st.balance, st.spent, st.purchasesCount, st.lastPurchaseAt, st.levelId, st.giftsAvailable, st.activityAt, st.expiresOn, iso(now));
+      .bind(clientId, st.balance, st.spent, st.purchasesCount, st.lastPurchaseAt, st.levelId, st.giftsAvailable, st.activityAt, st.expiresOn, iso(now), st.levelSum, st.levelCount);
   }
 
   /**
@@ -955,7 +1109,11 @@ export class D1Repository implements Repository {
            balance = COALESCE((SELECT SUM(amount) FROM points_ledger WHERE client_id = ?1), 0),
            purchases_count = (SELECT COUNT(*) FROM purchases WHERE client_id = ?1 AND status = 'active'),
            last_purchase_at = COALESCE((SELECT MAX(created_at) FROM purchases WHERE client_id = ?1 AND status = 'active'), ''),
-           gifts_available = (SELECT COUNT(*) FROM rewards WHERE client_id = ?1 AND status = 'available')
+           gifts_available = (SELECT COUNT(*) FROM rewards WHERE client_id = ?1 AND status = 'available'),
+           level_sum = COALESCE((SELECT SUM(p.amount) FROM purchases p JOIN clients c ON c.id = p.client_id WHERE p.client_id = ?1 AND p.status = 'active'
+                                 AND (c.level_override_at IS NULL OR p.created_at >= c.level_override_at)), 0),
+           level_count = (SELECT COUNT(*) FROM purchases p JOIN clients c ON c.id = p.client_id WHERE p.client_id = ?1 AND p.status = 'active'
+                          AND (c.level_override_at IS NULL OR p.created_at >= c.level_override_at))
          WHERE client_id = ?1`,
       )
       .bind(clientId);
@@ -1019,32 +1177,22 @@ export class D1Repository implements Repository {
     return results.map(listRowFromRow);
   }
 
-  /** Client profile + note + stored summary + full engine state, one read batch (consistent snapshot). */
-  async loadClientCard(id: string): Promise<ClientCard | null> {
+  /** Client profile + note + stored summary + BOUNDED engine state, one read batch (consistent snapshot). */
+  async loadClientCard(id: string, hint: LoadHint = {}): Promise<ClientCard | null> {
     const [client, stats, ...rest] = await this.db.batch<Row>([
       this.db.prepare('SELECT * FROM clients WHERE id = ?').bind(id),
       this.db.prepare('SELECT * FROM client_stats WHERE client_id = ?').bind(id),
-      ...this.stateStatements(id),
+      ...boundedStatements(this.db, [id], hint),
     ]);
     const c = client!.results[0];
     if (!c) return null;
-    const [cs, ver, purchases, ledger, moves, rewards, keys] = rest;
-    const st = cs!.results[0]!;
-    const state: ClientState = {
-      clientId: id,
-      registeredAt: date(st.created_at),
-      levelOverride: overrideFromRow(st),
-      purchases: purchases!.results.map(purchaseFromRow),
-      ledger: ledger!.results.map(ledgerFromRow),
-      cardMoves: moves!.results.map(moveFromRow),
-      rewards: rewards!.results.map(rewardFromRow),
-      sentNotificationKeys: keys!.results.map((r) => String(r.key)),
-    };
+    const { states } = assembleBounded(rest as Array<{ results: Row[] }>, D1Repository.ROW_MAPS);
+    const versioned = states.get(id) ?? (await this.loadClientState(id));
     return {
       client: clientFromRow(c),
       note: str(c.note),
       stats: stats!.results[0] ? statsFromRow(stats!.results[0]) : null,
-      versioned: { state, version: num(ver!.results[0]?.v ?? 0) },
+      versioned,
     };
   }
 
@@ -1055,16 +1203,29 @@ export class D1Repository implements Repository {
   async healStats(clientId: string, stats: ClientStats, version: number, now: Date): Promise<void> {
     await this.db
       .prepare(
-        `INSERT INTO client_stats (client_id, balance, spent, purchases_count, last_purchase_at, level_id, gifts_available, activity_at, expires_on, updated_at)
-         SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10
+        `INSERT INTO client_stats (client_id, balance, spent, purchases_count, last_purchase_at, level_id, gifts_available, activity_at, expires_on, updated_at, level_sum, level_count)
+         SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?12, ?13
          WHERE (SELECT COALESCE(MAX(version), 0) FROM client_versions WHERE client_id = ?1) = ?11
          ON CONFLICT(client_id) DO UPDATE SET
            balance = excluded.balance, spent = excluded.spent, purchases_count = excluded.purchases_count,
            last_purchase_at = excluded.last_purchase_at, level_id = excluded.level_id, gifts_available = excluded.gifts_available,
-           activity_at = excluded.activity_at, expires_on = excluded.expires_on, updated_at = excluded.updated_at`,
+           activity_at = excluded.activity_at, expires_on = excluded.expires_on, updated_at = excluded.updated_at,
+           level_sum = excluded.level_sum, level_count = excluded.level_count`,
       )
-      .bind(clientId, stats.balance, stats.spent, stats.purchasesCount, stats.lastPurchaseAt, stats.levelId, stats.giftsAvailable, stats.activityAt, stats.expiresOn, iso(now), version)
+      .bind(clientId, stats.balance, stats.spent, stats.purchasesCount, stats.lastPurchaseAt, stats.levelId, stats.giftsAvailable, stats.activityAt, stats.expiresOn, iso(now), version, stats.levelSum, stats.levelCount)
       .run();
+  }
+
+  /**
+   * Rebuild stats_daily from the raw rows (tests / maintenance: fixtures written with raw SQL).
+   * O(all rows): never on a request path.
+   */
+  async rebuildDailyStats(): Promise<void> {
+    await this.db.batch([
+      this.db.prepare('DELETE FROM stats_daily'),
+      invalidateBuyersStmt(this.db),
+      ...contributionStmts(this.db, 1, () => '1'),
+    ]);
   }
 
   /** Returns false if the client does not exist. */
@@ -1085,11 +1246,14 @@ export class D1Repository implements Repository {
     ]);
   }
 
-  /** Atomically marks a link used; null if unknown, expired or already used. */
-  async consumeExportLink(token: string, now: Date): Promise<{ kind: string; params: Record<string, string> } | null> {
+  /**
+   * Atomically marks a link used; null if unknown, expired, already used or made for another
+   * file (`kind`): a link opened on the wrong export path is NOT consumed.
+   */
+  async consumeExportLink(token: string, now: Date, kind: string): Promise<{ kind: string; params: Record<string, string> } | null> {
     const r = await this.db
-      .prepare('UPDATE export_links SET used_at = ?1 WHERE token = ?2 AND used_at IS NULL AND expires_at > ?1 RETURNING kind, params')
-      .bind(iso(now), token)
+      .prepare('UPDATE export_links SET used_at = ?1 WHERE token = ?2 AND kind = ?3 AND used_at IS NULL AND expires_at > ?1 RETURNING kind, params')
+      .bind(iso(now), token, kind)
       .first<{ kind: string; params: string }>();
     return r ? { kind: r.kind, params: JSON.parse(r.params) as Record<string, string> } : null;
   }
@@ -1137,6 +1301,11 @@ export class D1Repository implements Repository {
         NULL AS staff_id, NULL AS purchase_amount, NULL AS status, r.title AS reason
       FROM rewards r WHERE r.status = 'used' AND r.used_in_purchase IS NULL AND r.used_at >= ?1 AND r.used_at < ?2
         AND (r.used_at > ?1 OR 'gift-' || r.id > ?3)${lim('r.used_at', "'gift-' || r.id")}`),
+      // Gifts the owner granted without a purchase (migration 0006, partial index rewards_granted_idx).
+      wrap(`SELECT 'granted-' || r.id AS id, r.unlocked_at AS at, 'gift_granted' AS kind, 0 AS points, r.client_id AS client_id,
+        r.granted_by AS staff_id, NULL AS purchase_amount, NULL AS status, r.title || COALESCE(': ' || r.grant_reason, '') AS reason
+      FROM rewards r WHERE r.granted_by IS NOT NULL AND r.unlocked_at >= ?1 AND r.unlocked_at < ?2
+        AND (r.unlocked_at > ?1 OR 'granted-' || r.id > ?3)${lim('r.unlocked_at', "'granted-' || r.id")}`),
     ].join('\n      UNION ALL\n      ');
   }
 
@@ -1178,82 +1347,33 @@ export class D1Repository implements Repository {
         `SELECT * FROM (
            SELECT p.id AS id, p.created_at AS at, 'purchase' AS kind,
              (SELECT COALESCE(SUM(l.amount), 0) FROM points_ledger l WHERE l.purchase_id = p.id AND l.type IN ('accrual', 'redeem')) AS points,
-             p.client_id AS client_id, c.name AS client_name, p.staff_id AS staff_id, p.id AS purchase_id, p.amount AS purchase_amount, p.status AS status
+             p.client_id AS client_id, c.name AS client_name, p.staff_id AS staff_id, p.id AS purchase_id, p.amount AS purchase_amount, p.status AS status,
+             NULL AS reason,
+             -- can staff still reverse it (item 8)? the balance after the reversal and "its gift was used"
+             (SELECT s.balance FROM client_stats s WHERE s.client_id = p.client_id) + p.points_redeemed - COALESCE(json_extract(p.result, '$.cashback'), 0) AS rev_balance,
+             EXISTS (SELECT 1 FROM rewards r WHERE r.unlocked_by_purchase = p.id AND r.status = 'used') AS rev_gift_used
            FROM (SELECT * FROM purchases ORDER BY created_at DESC LIMIT ?1) p JOIN clients c ON c.id = p.client_id
            UNION ALL
            SELECT 'rev-' || p.id, p.reversed_at, 'reversal',
              (SELECT COALESCE(SUM(l.amount), 0) FROM points_ledger l WHERE l.purchase_id = p.id AND l.type = 'reversal'),
-             p.client_id, c.name, p.reversed_by, p.id, p.amount, p.status
+             p.client_id, c.name, p.reversed_by, p.id, p.amount, p.status, p.reversed_reason, NULL, NULL
            FROM (SELECT * FROM purchases WHERE status = 'reversed' ORDER BY reversed_at DESC LIMIT ?1) p JOIN clients c ON c.id = p.client_id
            UNION ALL
            SELECT l.id, l.created_at,
              CASE l.type WHEN 'welcome' THEN 'welcome' WHEN 'redeem' THEN 'redeem' WHEN 'expire' THEN 'expire' ELSE 'manual' END,
-             l.amount, l.client_id, c.name, l.staff_id, NULL, NULL, NULL
+             l.amount, l.client_id, c.name, l.staff_id, NULL, NULL, NULL, CASE l.type WHEN 'manual_adjust' THEN l.reason END, NULL, NULL
            FROM (SELECT * FROM points_ledger WHERE purchase_id IS NULL ORDER BY created_at DESC LIMIT ?1) l JOIN clients c ON c.id = l.client_id
            UNION ALL
-           SELECT 'gift-' || r.id, r.used_at, 'gift_used', 0, r.client_id, c.name, NULL, NULL, NULL, NULL
+           SELECT 'gift-' || r.id, r.used_at, 'gift_used', 0, r.client_id, c.name, NULL, NULL, NULL, NULL, NULL, NULL, NULL
            FROM (SELECT * FROM rewards WHERE status = 'used' AND used_in_purchase IS NULL ORDER BY used_at DESC LIMIT ?1) r JOIN clients c ON c.id = r.client_id
+           UNION ALL
+           SELECT 'granted-' || r.id, r.unlocked_at, 'gift_granted', 0, r.client_id, c.name, r.granted_by, NULL, NULL, NULL, r.grant_reason, NULL, NULL
+           FROM (SELECT * FROM rewards WHERE granted_by IS NOT NULL ORDER BY unlocked_at DESC LIMIT ?1) r JOIN clients c ON c.id = r.client_id
          ) ORDER BY at DESC LIMIT ?1`,
       )
       .bind(limit)
       .all<Row>();
     return results;
-  }
-
-  /**
-   * Owner statistics. Aggregates run in SQL (the weekly histogram is grouped by
-   * the Monday of the Tashkent-local week, UTC+5 without DST), so the Worker
-   * never materialises purchase rows.
-   */
-  async statsRows(nowIso: string, since7d: string, since90d: string, since8w: string) {
-    const [counts, points, gifts, repeat, weekly] = await this.db.batch<Row>([
-      this.db
-        .prepare(
-          `SELECT
-             (SELECT COUNT(*) FROM clients) AS clients,
-             (SELECT COUNT(*) FROM clients WHERE created_at >= ?) AS clients_new_7d,
-             (SELECT COUNT(*) FROM purchases WHERE status = 'active') AS purchases,
-             (SELECT COUNT(*) FROM purchases WHERE status = 'active' AND created_at >= ? AND created_at <= ?) AS purchases_7d,
-             (SELECT COALESCE(SUM(amount), 0) FROM purchases WHERE status = 'active') AS revenue`,
-        )
-        .bind(since7d, since7d, nowIso),
-      // accrued - redeemed - expired = outstanding (reversals net into the side they undo).
-      this.db.prepare(
-        `SELECT
-           COALESCE(SUM(CASE WHEN type IN ('accrual', 'welcome') OR (type = 'manual_adjust' AND amount > 0) OR (type = 'reversal' AND amount < 0)
-                             THEN amount ELSE 0 END), 0) AS accrued,
-           COALESCE(SUM(CASE WHEN type = 'redeem' OR (type = 'manual_adjust' AND amount < 0) OR (type = 'reversal' AND amount > 0)
-                             THEN -amount ELSE 0 END), 0) AS redeemed,
-           COALESCE(SUM(CASE WHEN type = 'expire' THEN -amount ELSE 0 END), 0) AS expired,
-           COALESCE(SUM(amount), 0) AS outstanding
-         FROM points_ledger`,
-      ),
-      this.db.prepare(
-        `SELECT COALESCE(SUM(status <> 'revoked'), 0) AS unlocked, COALESCE(SUM(status = 'used'), 0) AS used FROM rewards`,
-      ),
-      this.db
-        .prepare(
-          `SELECT COUNT(*) AS buyers, COALESCE(SUM(n >= 2), 0) AS repeaters FROM (
-             SELECT client_id, COUNT(*) AS n FROM purchases
-             WHERE status = 'active' AND created_at >= ? AND created_at <= ? GROUP BY client_id)`,
-        )
-        .bind(since90d, nowIso),
-      // Monday of the local week: shift to Tashkent (+5h), go back 6 days, then forward to the next Monday.
-      this.db
-        .prepare(
-          `SELECT date(created_at, '+5 hours', '-6 days', 'weekday 1') AS week_start, COUNT(*) AS n
-           FROM purchases WHERE status = 'active' AND created_at >= ? AND created_at <= ?
-           GROUP BY week_start`,
-        )
-        .bind(since8w, nowIso),
-    ]);
-    return {
-      counts: counts!.results[0]!,
-      points: points!.results[0]!,
-      gifts: gifts!.results[0]!,
-      repeat: repeat!.results[0]!,
-      weekly: weekly!.results.map((r) => ({ weekStart: String(r.week_start), purchases: num(r.n) })),
-    };
   }
 
   /** Persist bot message attempts, one batch. Never throws. */
@@ -1284,7 +1404,8 @@ export class D1Repository implements Repository {
       this.db.prepare(`INSERT OR IGNORE INTO maintenance (flag) VALUES ('allow_ledger_delete')`),
       ...[
         'points_ledger', 'card_moves', 'rewards', 'purchases', 'client_versions', 'notification_keys',
-        'notifications_log', 'important_dates', 'client_stats', 'export_links', 'clients', 'staff', 'test_roles', 'tg_users',
+        'notifications_log', 'outbox', 'important_dates', 'client_stats', 'export_links', 'client_imports', 'import_updates', 'clients', 'staff', 'test_roles', 'tg_users',
+        'system_events', 'cron_runs', 'import_batches', 'web_link_tokens', 'web_session_versions', 'stats_daily', 'stats_buyers',
       ].map((t) => this.db.prepare(`DELETE FROM ${t}`)),
       this.db.prepare('DELETE FROM rules_versions WHERE id <> 1'),
       this.db.prepare(`DELETE FROM settings WHERE key NOT IN ('rules_version', 'clock_offset_days')`),

@@ -51,3 +51,9 @@ export function giftLayout(rewards: readonly CellReward[]): Record<string, strin
 export function giftCodeOfReward(r: Reward): string {
   return giftCode(r);
 }
+
+/** Gift type codes the rules use on the honeycomb (current and next cards), in cell order, unique. */
+export function ruleGiftCodes(rules: { honeycomb: { rewards: readonly CellReward[]; nextCardRewards?: readonly CellReward[] | undefined } }): string[] {
+  const all = [...rules.honeycomb.rewards, ...(rules.honeycomb.nextCardRewards ?? [])].sort((a, b) => a.cell - b.cell);
+  return [...new Set(all.map(giftCode))];
+}

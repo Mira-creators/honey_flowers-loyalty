@@ -34,6 +34,10 @@ export type LoyaltyEvent =
   | { type: 'points_expired'; clientId: string; amount: Uzs }
   | { type: 'card_reset'; clientId: string }
   | { type: 'purchase_reversed'; clientId: string; purchaseId: string; reason: string }
+  /** Owner gave a gift without a purchase (commands/grant.ts). */
+  | { type: 'gift_granted'; clientId: string; rewardId: string; rewardType: RewardType; title: string; reason: string }
+  /** Owner credited bonus мёд without a purchase (commands/grant.ts). */
+  | { type: 'points_granted'; clientId: string; amount: Uzs; balance: Uzs; reason: string }
   /** Manual correction of the balance by the owner (manualAdjust): signed amount and the reason given. */
   | { type: 'points_adjusted'; clientId: string; amount: Uzs; balance: Uzs; reason: string };
 

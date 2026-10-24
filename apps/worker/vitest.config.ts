@@ -29,6 +29,7 @@ export default defineConfig(async () => {
       alias: {
         '@honey/core': fileURLToPath(new URL('../../packages/core/src/index.ts', import.meta.url)),
         '@honey/service': fileURLToPath(new URL('../../packages/service/src/index.ts', import.meta.url)),
+        '@honey/contracts': fileURLToPath(new URL('../../packages/contracts/src/index.ts', import.meta.url)),
       },
     },
     test: {

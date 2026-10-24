@@ -2,7 +2,7 @@ import { LoyaltyError } from '../errors.js';
 import { percentOf } from '../money.js';
 import { applyOutcome, emptyOutcome, mergeOutcomes, type Outcome } from '../outcome.js';
 import type { LoyaltyRules } from '../rules.js';
-import { balanceFromLedger } from '../state.js';
+import { balanceOf } from '../state.js';
 import type { ClientState, Uzs } from '../types.js';
 import { assert, findAvailableReward, redeemCap } from './common.js';
 import { settleExpiry } from './expiry.js';
@@ -63,7 +63,7 @@ export function redeem(rules: LoyaltyRules, state: ClientState, input: RedeemInp
     assert(Number.isSafeInteger(order) && (order ?? 0) > 0, 'INVALID_INPUT', 'orderAmount is required to redeem points');
     const discount = reward?.type === 'discount_pct' ? percentOf(order!, reward.value ?? 0) : 0;
     const cap = redeemCap(rules, order!, discount);
-    const balance = balanceFromLedger(s.ledger);
+    const balance = balanceOf(s);
     assert(points <= balance, 'INSUFFICIENT_BALANCE', `balance ${balance} < ${points}`);
     assert(points <= cap, 'REDEEM_CAP_EXCEEDED', `at most ${cap} points can be used on this order`);
     out.ledger.push({

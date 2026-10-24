@@ -6,6 +6,8 @@ import { api, ApiErr, newIdempotencyKey } from '../api';
 import { tg } from '../tg';
 import { esc, fmt, toast, sheet, closeLayer, debounce } from '../ui/dom';
 import { IC } from '../ui/icons';
+import { openGrantSheet } from './grantSheet';
+import { myCardButton } from './myCard';
 
 const dt = (iso: string) => new Date(iso).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 const roleName = () => ({ florist: 'Сотрудник', manager: 'Сотрудник', owner: 'Владелец', client: 'Клиент' }[S.me!.role]);
@@ -13,7 +15,7 @@ const roleName = () => ({ florist: 'Сотрудник', manager: 'Сотруд�
 export function staffView(): string {
   const st = S.staff;
   const body = st.step === 'find' ? findView() : st.step === 'client' ? clientView() : doneView();
-  return `<main class="scr" id="scr"><div class="staff-head"><span class="pill">${roleName()}</span></div>${body}</main>`;
+  return `<main class="scr" id="scr"><div class="staff-head">${myCardButton()}<span class="pill">${roleName()}</span></div>${body}</main>`;
 }
 
 function findView() {
@@ -33,28 +35,35 @@ function recentBlock() {
   return `<div class="sub">Последние операции</div><div class="ops">${r.slice(0, 12).map(opRow).join('')}</div>`;
 }
 export function opRow(o: OperationDTO) {
-  const what = o.kind === 'purchase' ? `Покупка ${fmt(o.purchaseAmount ?? 0)} сум` : ({ welcome: 'Регистрация', expire: 'Сгорание', reversal: 'Отмена', manual: 'Корректировка', redeem: 'Оплата мёдом', gift_used: 'Подарок выдан' } as Record<string, string>)[o.kind] ?? o.kind;
-  const canReverse = o.kind === 'purchase' && o.status === 'active' && o.purchaseId;
-  return `<div class="op ${o.status === 'reversed' ? 'dim' : ''}"><div><b>${esc(o.clientName)}</b> · ${what}${o.status === 'reversed' ? ' · <span class="bad">отменена</span>' : ''}<div class="s">${dt(o.at)}${o.staffName ? ' · ' + esc(o.staffName) : ''}</div></div><div class="op-r"><span class="amt ${o.points >= 0 ? 'p' : 'm'}">${o.points >= 0 ? '+' : '−'}${fmt(Math.abs(o.points))}</span>${canReverse ? `<button class="link" data-act="askReverse" data-id="${esc(o.purchaseId!)}">Отменить</button>` : ''}</div></div>`;
+  const what = o.kind === 'purchase' ? `Покупка ${fmt(o.purchaseAmount ?? 0)} сум` : ({ welcome: 'Регистрация', expire: 'Сгорание', reversal: 'Отмена', manual: 'Корректировка', redeem: 'Оплата мёдом', gift_used: 'Подарок выдан', gift_granted: 'Подарок от владельца' } as Record<string, string>)[o.kind] ?? o.kind;
+  // The server says whether staff may still reverse it (24 h window, gift unused, мёд unspent).
+  const active = o.kind === 'purchase' && o.status === 'active' && o.purchaseId;
+  const canReverse = active && o.reversible !== false;
+  const blocked = active && o.reversible === false ? `<span class="s" title="${esc(o.reverseBlocked ?? '')}">отмена недоступна</span>` : '';
+  return `<div class="op ${o.status === 'reversed' ? 'dim' : ''}"><div><b>${esc(o.clientName)}</b> · ${what}${o.status === 'reversed' ? ' · <span class="bad">отменена</span>' : ''}<div class="s">${dt(o.at)}${o.staffName ? ' · ' + esc(o.staffName) : ''}${o.reason ? ' · ' + esc(o.reason) : ''}</div></div><div class="op-r"><span class="amt ${o.points >= 0 ? 'p' : 'm'}">${o.points >= 0 ? '+' : '−'}${fmt(Math.abs(o.points))}</span>${canReverse ? `<button class="link" data-act="askReverse" data-id="${esc(o.purchaseId!)}">Отменить</button>` : blocked}</div></div>${blocked && o.reverseBlocked ? `<div class="s mut" style="margin:-4px 0 6px">${esc(o.reverseBlocked)}</div>` : ''}`;
 }
 
 function clientView() {
   const st = S.staff, c = st.client!, p = st.preview;
   const amt = +st.amount || 0;
   const gifts = c.gifts.filter(g => g.status === 'available');
+  // Own card («Моя карта»): the server refuses it (self_operation) except for the owner in TEST_MODE.
+  const own = S.me!.client?.id === c.id && !(S.me!.role === 'owner' && S.me!.testMode);
   return `<button class="back" data-act="backToFind">‹ Другой клиент</button>
     <div class="cl"><div class="ava">${esc(c.name.slice(0, 1))}</div><div><b>${esc(c.name)}</b> <span class="mut">${esc(c.code)}</span><div class="mut">${esc(c.phoneMasked)}</div><div class="mut">${esc(c.level.name)} · ${c.level.pct}% · ${fmt(c.balance)} мёда · соты ${c.card.filled}/${c.card.cells}</div></div></div>
+    ${own ? '<div class="note-box warn">Это ваша карта. Нельзя проводить покупку на свою карту — попросите коллегу.</div>' : ''}
+    ${S.me!.role === 'owner' && !own ? '<button class="b full" data-act="openGrant" style="margin:0 0 10px">🎁 Подарок или мёд без покупки</button>' : ''}
     <div class="amount-disp" aria-live="polite">${amt ? fmt(amt) : '0'}<small>сум</small></div>
     <div class="pad">${['1', '2', '3', '4', '5', '6', '7', '8', '9', '000', '0', '⌫'].map(k => `<button data-act="key" data-k="${k}" aria-label="${k === '⌫' ? 'Стереть' : k}">${k}</button>`).join('')}</div>
     <div class="seg2" role="group" aria-label="Канал"><button data-act="channel" data-v="store" aria-pressed="${st.channel === 'store'}">В магазине</button><button data-act="channel" data-v="delivery" aria-pressed="${st.channel === 'delivery'}">Доставка</button></div>
     <button class="tog" data-act="redeem" aria-pressed="${st.redeem}" ${c.balance <= 0 ? 'disabled' : ''}><span>Оплатить мёдом${p ? ` · до ${fmt(p.maxRedeem)}` : ''}</span><span class="sw"></span></button>
-    ${gifts.length ? `<label class="fl" for="giftSel">Подарок клиента</label><select id="giftSel" data-change="gift"><option value="">Не применять</option>${gifts.map(g => `<option value="${esc(g.id)}" ${st.giftId === g.id ? 'selected' : ''}>${esc(GIFT_LABELS[g.type] ?? g.type)} (ячейка ${g.cell})</option>`).join('')}</select>` : ''}
+    ${gifts.length ? `<label class="fl" for="giftSel">Подарок клиента</label><select id="giftSel" data-change="gift"><option value="">Не применять</option>${gifts.map(g => `<option value="${esc(g.id)}" ${st.giftId === g.id ? 'selected' : ''}>${esc(GIFT_LABELS[g.type] ?? g.type)} ${g.source === 'grant' ? '(подарок владельца)' : `(ячейка ${g.cell})`}</option>`).join('')}</select>` : ''}
     <div class="calc">${amt ? (p ? `
       <span>К оплате деньгами: <b>${fmt(p.paid)} сум</b>${p.redeemed ? ` · мёдом ${fmt(p.redeemed)}` : ''}${p.discount ? ` · скидка ${fmt(p.discount)}` : ''}</span>
       <span>Кешбэк ${p.pct}%: <b>+${fmt(p.cashback)} мёда</b></span>
       <span>${p.cell ? `Соты: <b>ячейка ${p.cell}</b>${p.unlocksGift ? ` · откроется подарок: ${esc(GIFT_LABELS[p.giftType ?? ''] ?? 'сюрприз')} 🎁` : ''}` : p.cellBlockedReason === 'daily_limit' ? 'Ячейка не засчитается: сегодня уже была покупка' : `Ячейка не засчитается: покупка меньше ${fmt(S.me!.rules.minPurchaseForCell)} сум`}</span>`
       : st.previewError ? `<span class="bad">${esc(st.previewError)}</span>` : '<span>Считаем…</span>') : '<span>Введите сумму покупки</span>'}</div>
-    <button class="b acc full big" data-act="charge" ${!amt || !p || st.busy ? 'disabled' : ''}>${st.busy ? 'Начисляем…' : 'Начислить'}</button>`;
+    <button class="b acc full big" data-act="charge" ${!amt || !p || st.busy || own ? 'disabled' : ''}>${st.busy ? 'Начисляем…' : 'Начислить'}</button>`;
 }
 
 function doneView() {
@@ -134,9 +143,10 @@ actions.charge = async () => {
   } finally { st.busy = false; app.render(); }
 };
 actions.nextBuy = () => { resetStaff(); app.render(); loadRecent(); };
+actions.openGrant = () => { const c = S.staff.client; if (c) openGrantSheet(c.id, c.name); };
 actions.askReverse = el => {
   const id = el.dataset.id!;
-  const sh = sheet(`<h4>Отменить покупку?</h4><p>Мёд, ячейка и подарок этой покупки откатятся. Клиент получит уведомление.</p>
+  const sh = sheet(`<h4>Отменить покупку?</h4><p>Только для исправления ошибки на кассе (не та сумма, не тот клиент, покупки не было). Мёд, ячейка и подарок этой покупки откатятся. Клиент получит уведомление.</p>
     <div class="chips">${REVERSE_REASONS.map(r => `<button class="chip" data-reason="${esc(r)}">${esc(r)}</button>`).join('')}</div>
     <input id="revReason" placeholder="Или своя причина" autocomplete="off">
     <div class="row2"><button class="b" id="revNo" style="justify-content:center">Не отменять</button><button class="b danger" id="revYes">Отменить покупку</button></div>`);

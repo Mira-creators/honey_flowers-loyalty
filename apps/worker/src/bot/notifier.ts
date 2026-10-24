@@ -1,5 +1,5 @@
 import type { LoyaltyEvent, LoyaltyRules } from '@honey/core';
-import type { Notifier } from '@honey/service';
+import { isUnlinkedTelegramId, type Notifier } from '@honey/service';
 import type { D1Repository, NotificationLogEntry } from '../db/d1Repository.js';
 import type { Env } from '../env.js';
 import { tgCall, webAppKeyboard } from './telegramApi.js';
@@ -33,6 +33,9 @@ export class TelegramNotifier implements Notifier {
     const log: NotificationLogEntry[] = [];
     for (const [clientId, list] of byClient) {
       const contact = contacts.get(clientId);
+      // No real chat behind demo clients (TEST_MODE seeding) and clients imported from the old base
+      // who have not opened the bot yet (negative placeholder ids): never message them, nothing to log.
+      if (contact && (contact.demo || isUnlinkedTelegramId(contact.telegramId) || contact.telegramId === 0)) continue;
       const lang = contact?.language ?? 'ru';
       const text = composeMessage(rules, list, lang);
       if (!text) continue;
@@ -95,6 +98,12 @@ export function composeMessage(rules: LoyaltyRules, events: LoyaltyEvent[], lang
         break;
       case 'purchase_reversed':
         lines.push(T.reversed(e.reason));
+        break;
+      case 'gift_granted':
+        lines.push(T.giftGranted(e.title, e.reason));
+        break;
+      case 'points_granted':
+        lines.push(T.pointsGranted(e.amount, e.balance, e.reason));
         break;
       case 'points_adjusted':
         lines.push(T.adjusted(e.amount, e.balance, e.reason));

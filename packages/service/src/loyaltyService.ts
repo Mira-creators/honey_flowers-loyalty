@@ -2,10 +2,11 @@ import {
   applyOutcome,
   applyPurchase,
   availableRewards,
-  balanceFromLedger,
+  balanceOf,
   cardPosition,
   deriveLevel,
   expiryInfo,
+  isGrantedReward,
   LoyaltyError,
   purchasesToNextReward,
   redeem,
@@ -23,8 +24,9 @@ import {
   type PurchaseRecord,
   type Uzs,
 } from '@honey/core';
-import { ConcurrencyError, type ClientProfile, type Repository, type StaffMember } from './repository.js';
+import { ConcurrencyError, type ClientProfile, type LoadHint, type Repository, type StaffMember } from './repository.js';
 import type { Notifier } from './notifier.js';
+import { isUnlinkedTelegramId } from './phone.js';
 
 export class NotFoundError extends Error {}
 
@@ -34,7 +36,11 @@ export class PhoneTakenError extends Error {}
 export interface ServiceOptions {
   /** How many times a command is re-run after a ConcurrencyError (default 3 → up to 4 runs). */
   maxRetries?: number;
-  /** Base delay before a retry, ms (jittered, grows with the attempt). Default 15; 0 disables. */
+  /**
+   * Base delay before a retry, ms. "Full jitter" exponential backoff: a random wait in
+   * [0, min(400, base · 2^attempt)), so writers that collided spread out instead of colliding
+   * again. Default 20; 0 disables.
+   */
   retryDelayMs?: number;
   /**
    * Schedules notification delivery. Default: awaited inline (errors caught).
@@ -93,7 +99,7 @@ export class LoyaltyService {
     private readonly opts: ServiceOptions = {},
   ) {
     this.maxRetries = opts.maxRetries ?? 3;
-    this.retryDelayMs = opts.retryDelayMs ?? 15;
+    this.retryDelayMs = opts.retryDelayMs ?? 20;
   }
 
   /** Send events after commit; never throws. */
@@ -114,16 +120,18 @@ export class LoyaltyService {
   async execute<T = undefined>(
     clientId: string,
     fn: (ctx: CommandContext) => Outcome | { outcome: Outcome; extra: T },
+    /** Rows the command needs beyond the latest history (bounded load); see Repository.loadClientState. */
+    hint: Omit<LoadHint, 'now' | 'rules'> = {},
   ): Promise<CommandResult<T>> {
     let lastError: unknown = null;
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
       if (attempt > 0 && this.retryDelayMs > 0) {
-        // Jittered backoff so parallel writers do not collide again immediately.
-        await new Promise((r) => setTimeout(r, this.retryDelayMs * attempt * (0.5 + Math.random())));
+        // Full-jitter exponential backoff so parallel writers do not collide again immediately.
+        await new Promise((r) => setTimeout(r, Math.random() * Math.min(400, this.retryDelayMs * 2 ** attempt)));
       }
       const now = this.clock();
       const rv = await this.repo.getActiveRules(now);
-      const { state, version } = await this.repo.loadClientState(clientId);
+      const { state, version } = await this.repo.loadClientState(clientId, { ...hint, now, rules: rv.rules });
       const res = fn({ rules: rv.rules, rulesVersion: rv.id, state, now });
       const { outcome, extra } = 'outcome' in res ? res : { outcome: res, extra: undefined as T };
       if (hasEffects(outcome)) {
@@ -172,28 +180,41 @@ export class LoyaltyService {
   async registerWithPhone(input: { telegramId: number; name: string | null; phone: string; language: string }): Promise<{
     client: ClientProfile;
     created: boolean;
+    /** The phone matched a client imported from the shop's old base: this account took it over. */
+    claimed: boolean;
     welcomeBonus: Uzs;
   }> {
-    const owner = (await this.repo.searchClientsByPhone(input.phone, 5)).find(
+    const holder = (await this.repo.searchClientsByPhone(input.phone, 5)).find(
       (c) => c.phone === input.phone && c.telegramId !== input.telegramId,
     );
-    if (owner) throw new PhoneTakenError('этот номер уже привязан к другому аккаунту Telegram');
+    if (holder) return this.claimImported(holder, input);
 
     let client = await this.repo.findClientByTelegramId(input.telegramId);
     let created = false;
     let completesRegistration = false;
     if (!client) {
-      client = await this.repo.createClient({
-        telegramId: input.telegramId,
-        name: input.name,
-        phone: input.phone,
-        language: input.language,
-        consentAt: this.clock(),
-        createdAt: this.clock(),
-      });
-      created = true;
-      completesRegistration = true;
-    } else if (client.phone !== input.phone || (!client.name && input.name)) {
+      try {
+        client = await this.repo.createClient({
+          telegramId: input.telegramId,
+          name: input.name,
+          phone: input.phone,
+          language: input.language,
+          consentAt: this.clock(),
+          createdAt: this.clock(),
+        });
+        created = true;
+        completesRegistration = true;
+      } catch (e) {
+        // A parallel request of the SAME user (double tap, retried contact) created the client a
+        // moment ago: its insert won the unique key (telegram id or phone). That is not "the phone
+        // belongs to another account" — answer with the same client (idempotent).
+        const again = await this.repo.findClientByTelegramId(input.telegramId);
+        if (!again) throw e;
+        if (again.phone === input.phone) return { client: again, created: false, claimed: false, welcomeBonus: 0 };
+        client = again;
+      }
+    }
+    if (!created && (client.phone !== input.phone || (!client.name && input.name))) {
       completesRegistration = client.phone === null;
       client = await this.repo.updateClient(client.id, {
         phone: input.phone,
@@ -201,10 +222,38 @@ export class LoyaltyService {
         consentAt: client.consentAt ?? this.clock(),
       });
     }
-    if (!completesRegistration) return { client, created, welcomeBonus: 0 };
+    if (!completesRegistration) return { client, created, claimed: false, welcomeBonus: 0 };
     const res = await this.execute(client.id, ({ rules, state, now }) => registerClient(rules, state, now));
     const welcome = res.outcome.ledger.find((e) => e.type === 'welcome')?.amount ?? 0;
-    return { client, created, welcomeBonus: welcome };
+    return { client, created, claimed: false, welcomeBonus: welcome };
+  }
+
+  /**
+   * The phone already belongs to a client. If that client was imported from the old base
+   * and is not linked to Telegram yet, this Telegram account CLAIMS it: same client row,
+   * balance, history and card; registration completes now (welcome bonus once, if enabled).
+   * A phone of a real Telegram account, or a caller who already has a card of their own
+   * (two cards would have to be merged by hand), is refused as before.
+   */
+  private async claimImported(
+    holder: ClientProfile,
+    input: { telegramId: number; name: string | null; language: string },
+  ): Promise<{ client: ClientProfile; created: boolean; claimed: boolean; welcomeBonus: Uzs }> {
+    const taken = () => new PhoneTakenError('этот номер уже привязан к другому аккаунту Telegram');
+    // Demo clients (TEST_MODE seeding) also have negative ids: they are never handed to a real person.
+    // The repository additionally requires an explicit import record (D1: client_imports).
+    if (holder.demo || !isUnlinkedTelegramId(holder.telegramId) || !this.repo.claimClient) throw taken();
+    if (await this.repo.findClientByTelegramId(input.telegramId)) throw taken();
+    const client = await this.repo.claimClient(holder.id, holder.telegramId, {
+      telegramId: input.telegramId,
+      name: input.name,
+      language: input.language,
+      consentAt: this.clock(),
+    });
+    if (!client) throw taken(); // claimed by someone else a moment ago
+    const res = await this.execute(client.id, ({ rules, state, now }) => registerClient(rules, state, now));
+    const welcome = res.outcome.ledger.find((e) => e.type === 'welcome')?.amount ?? 0;
+    return { client, created: false, claimed: true, welcomeBonus: welcome };
   }
 
   // ------------------------------------------------------------ commands (apps/api shapes)
@@ -216,11 +265,12 @@ export class LoyaltyService {
     const { state: stored } = await this.repo.loadClientState(client.id);
     const state = applyOutcome(stored, settleExpiry(rules, stored, now));
 
-    const balance = balanceFromLedger(state.ledger);
+    const balance = balanceOf(state);
     const level = deriveLevel(rules, state, now);
     const pos = cardPosition(rules, state);
     const layout = rewardsForCycle(rules, pos.cycle);
-    const unlockedThisCycle = state.rewards.filter((r) => r.cycle === pos.cycle);
+    // Gifts granted by the owner are not tied to a cell.
+    const unlockedThisCycle = state.rewards.filter((r) => r.cycle === pos.cycle && !isGrantedReward(r));
     const expiry = expiryInfo(rules, state, now);
 
     return {
@@ -287,7 +337,9 @@ export class LoyaltyService {
       throw new LoyaltyError('IDEMPOTENCY_CONFLICT', 'idempotencyKey was already used for another client');
     }
     const purchaseId = crypto.randomUUID();
-    const { outcome } = await this.execute(client.id, ({ rules, state, now }) =>
+    const { outcome } = await this.execute(
+      client.id,
+      ({ rules, state, now }) =>
       applyPurchase(
         rules,
         state,
@@ -302,6 +354,7 @@ export class LoyaltyService {
         },
         now,
       ),
+      { keys: [input.idempotencyKey], rewardIds: input.useRewardId ? [input.useRewardId] : [] },
     );
     const purchase = outcome.purchase!;
     // A replay of a purchase that was reversed meanwhile is surfaced explicitly.
@@ -311,17 +364,21 @@ export class LoyaltyService {
   async redeem(staff: StaffMember, input: { clientId: string; idempotencyKey: string; points?: Uzs; orderAmount?: Uzs; rewardId?: string | null; reason?: string | null }) {
     const client = await this.repo.findClientById(input.clientId);
     if (!client) throw new NotFoundError('client not found');
-    const { outcome, state } = await this.execute(client.id, ({ rules, state, now }) =>
-      redeem(rules, state, { ...input, staffId: staff.id }, now),
+    const { outcome, state } = await this.execute(
+      client.id,
+      ({ rules, state, now }) => redeem(rules, state, { ...input, staffId: staff.id }, now),
+      { keys: [input.idempotencyKey], rewardIds: input.rewardId ? [input.rewardId] : [] },
     );
-    return { replayed: outcome.replayed, balance: balanceFromLedger(state.ledger), events: outcome.events };
+    return { replayed: outcome.replayed, balance: balanceOf(state), events: outcome.events };
   }
 
   async reverse(staff: StaffMember, input: { purchaseId: string; reason: string }) {
     const purchase = await this.repo.findPurchaseById(input.purchaseId);
     if (!purchase) throw new NotFoundError('purchase not found');
-    const { outcome } = await this.execute(purchase.clientId, ({ rules, state, now }) =>
-      reversePurchase(rules, state, { purchaseId: input.purchaseId, reason: input.reason, staffId: staff.id }, now),
+    const { outcome } = await this.execute(
+      purchase.clientId,
+      ({ rules, state, now }) => reversePurchase(rules, state, { purchaseId: input.purchaseId, reason: input.reason, staffId: staff.id }, now),
+      { purchaseId: input.purchaseId },
     );
     return { replayed: outcome.replayed, purchase: publicPurchase(outcome.purchase!), warnings: outcome.warnings, events: outcome.events };
   }
@@ -337,7 +394,7 @@ export class LoyaltyService {
           id: c.id,
           name: c.name,
           phone: c.phone,
-          balance: balanceFromLedger(state.ledger),
+          balance: balanceOf(state),
           level: deriveLevel(rules, state, now).tier.id,
           card: cardPosition(rules, state),
           availableGifts: availableRewards(state).map((r) => ({ id: r.id, type: r.type, title: r.title, value: r.value })),

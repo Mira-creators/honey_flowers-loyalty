@@ -3,6 +3,7 @@ import app from '../src/app.js';
 import { createContext } from '../src/context.js';
 import { runDailyJob } from '../src/cron.js';
 import { countingEnv } from './d1Counter.js';
+import { refreshStats } from './consoleHelpers.js';
 import { execCtx, makeStaff, mockTelegram, register, repo, resetDb, T, testEnv } from './helpers.js';
 
 /**
@@ -37,6 +38,7 @@ async function seed(n: number, p: number, ageDays: number) {
        SELECT client_id, id, 1, CAST(substr(id, instr(id, '-') + 1) AS INTEGER), 'purchase', NULL, created_at FROM purchases`),
     db.prepare(`INSERT INTO client_versions (client_id, version) SELECT id, 1 FROM clients`),
   ]);
+  await refreshStats(); // raw fixture rows: client_stats, stats_daily, next_check_on as the write paths would
 }
 
 let tg: ReturnType<typeof mockTelegram>;
@@ -62,12 +64,13 @@ describe('W2/W3: daily job', () => {
     await db.prepare(
       `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 300)
        INSERT INTO clients (id, telegram_id, code, phone, name, language, consent_at, created_at)
-       SELECT 'idle' || i, 2000000000 + i, 'HI' || printf('%06d', i), '+99891' || printf('%07d', i), 'Idle ' || i, 'ru', ?1, ?1 FROM n`,
-    ).bind(new Date().toISOString()).run().catch(() => undefined);
+       SELECT 'idle' || i, 2000000000 + i, 'HF9' || printf('%05d', i), '+99891' || printf('%07d', i), 'Idle ' || i, 'ru', ?1, ?1 FROM n`,
+    ).bind(new Date().toISOString()).run();
+    await refreshStats();
     const idle = await db.prepare(`SELECT COUNT(*) AS n FROM clients WHERE id LIKE 'idle%'`).first<{ n: number }>();
 
     const run = async () => {
-      const { env, c } = countingEnv();
+      const { env, c } = countingEnv(testEnv, { CRON_MAX_CLIENTS: '40' });
       const pending: Promise<unknown>[] = [];
       const ctx = await createContext(env, { waitUntil: (p) => void pending.push(p) });
       tg.calls.length = 0;
@@ -77,23 +80,24 @@ describe('W2/W3: daily job', () => {
     };
 
     const r1 = await run();
-    expect(r1.res).toMatchObject({ checked: 40, warned: 40, failed: 0, more: true });
-    expect(r1.fetches).toBe(40);
-    // 2 fixed (clock, rules) + candidates + 1 state batch + 40 saves + 1 schedule + contacts + log batch
-    expect(r1.d1).toBeLessThanOrEqual(48);
+    expect(r1.res).toMatchObject({ checked: 40, warned: 40, failed: 0, more: true, sent: 25 });
+    expect(r1.fetches).toBe(25); // CRON_MAX_SENDS (25): the other reminders wait in the outbox
+    // clock, rules, candidates, 1 state batch, 1 write batch for all 40, outbox select, outbox/log batch
+    expect(r1.d1).toBeLessThanOrEqual(8);
 
     const r2 = await run();
-    expect(r2.res).toMatchObject({ checked: DUE - 40 + Number(idle?.n ?? 0) > 40 ? 40 : DUE - 40 + Number(idle?.n ?? 0), warned: DUE - 40 });
-    // Idle clients get a far-future next_check_on and are not loaded again.
-    let r = r2;
-    for (let i = 0; i < 12 && r.res.more; i++) r = await run();
+    // Idle clients (nothing pending: next_check_on NULL) are never loaded.
+    expect(idle?.n).toBe(300);
+    expect(r2.res).toMatchObject({ checked: DUE - 40, warned: DUE - 40, more: false, sent: 25 });
     const r3 = await run();
-    expect(r3.res).toMatchObject({ checked: 0, warned: 0, expired: 0, more: false });
-    expect(r3.d1).toBeLessThanOrEqual(4);
-    expect(r3.rowsRead).toBeLessThanOrEqual(5);
+    expect(r3.res).toMatchObject({ checked: 0, warned: 0, expired: 0, more: false, sent: DUE - 50 });
+    const r4 = await run();
+    expect(r4.res).toMatchObject({ checked: 0, sent: 0 });
+    expect(r4.d1).toBeLessThanOrEqual(4);
+    expect(r4.rowsRead).toBeLessThanOrEqual(5);
   }, 60_000);
 
-  it('a client that fails does not stop the others; activity puts a client back in the queue', async () => {
+  it('a client that fails does not stop the others; the next date is stored precisely', async () => {
     await seed(3, 2, 76);
     await testEnv.DB.prepare(`UPDATE clients SET created_at = 'garbage' WHERE id = 'c2'`).run();
     const ctx = await createContext(testEnv, {});
@@ -104,7 +108,7 @@ describe('W2/W3: daily job', () => {
     const row = await testEnv.DB.prepare(`SELECT next_check_on FROM clients WHERE id = 'c1'`).first<{ next_check_on: string }>();
     expect(row!.next_check_on).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     expect(row!.next_check_on > new Date().toISOString().slice(0, 10)).toBe(true);
-    // ...and a purchase resets the schedule.
+    // ...and a new client without мёд has nothing pending (NULL: never loaded by the job).
     await makeStaff(T + 1001, 'florist');
     const me = await register(T + 5001);
     expect((await testEnv.DB.prepare('SELECT next_check_on FROM clients WHERE id = ?').bind(me.client!.id).first<{ next_check_on: string | null }>())!.next_check_on).toBeNull();
@@ -128,6 +132,8 @@ describe('W4/W5: list endpoints and polling', () => {
     expect(ops.rowsRead).toBeLessThan(2000);
     const stats = await measure('/api/owner/stats');
     expect(stats.calls).toBeLessThanOrEqual(6);
+    // stats_daily (migration 0007): ~100 day rows instead of every purchase / ledger row.
+    expect(stats.rowsRead).toBeLessThan(400);
     const body = await (await get(testEnv, '/api/owner/stats', T + 1)).json() as { perWeek: Array<{ purchases: number }>; purchases: number };
     expect(body.perWeek.reduce((s, w) => s + w.purchases, 0)).toBe(N * 5);
 

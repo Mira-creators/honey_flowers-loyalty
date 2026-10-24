@@ -25,6 +25,9 @@ const LOYALTY_STATUS: Record<LoyaltyErrorCode, number> = {
   REWARD_NOT_AVAILABLE: 409,
   PURCHASE_NOT_FOUND: 404,
   IDEMPOTENCY_CONFLICT: 409,
+  REVERSAL_WINDOW_EXPIRED: 409,
+  REVERSAL_GIFT_USED: 409,
+  REVERSAL_POINTS_SPENT: 409,
 };
 
 /** Build the Fastify app (no listen) — used by server.ts and tests. */

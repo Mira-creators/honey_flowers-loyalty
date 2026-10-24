@@ -21,6 +21,16 @@ export function fmtDate(key: string): string {
   return `${d}.${m}.${y}`;
 }
 
+/** Rules facts for /help (from the rules in force). */
+export interface HelpInfo {
+  levels: Array<{ title: string; pct: number }>;
+  minCell: number;
+  giftCells: number[];
+  maxRedeemPct: number;
+  expiryDays: number;
+  owner: boolean;
+}
+
 const ru = {
   greeting: (name: string) =>
     `Здравствуйте, ${name}! 🌸\nЭто программа лояльности Honey Flowers «Медовые соты»: за каждую покупку — мёд (кешбэк) и шаг пчёлки по сотам с подарками.\n\n🇺🇿 Assalomu alaykum! Honey Flowers sodiqlik dasturiga xush kelibsiz.`,
@@ -37,7 +47,24 @@ const ru = {
     (bonus > 0 ? `Готово! 🎉 Вам начислено ${fmt(bonus)} мёда в подарок.\n` : 'Готово! 🎉 Ваша медовая карта создана.\n') +
     `Номер карты: ${code}. Покажите QR из карты флористу при покупке.`,
   alreadyRegistered: (code: string) => `Вы уже участник программы. Номер карты: ${code}.`,
-  help: 'Команды:\n/card — открыть медовую карту\n/lang — язык / til\n/start — начать заново',
+  claimed: (bonus: number, code: string) =>
+    `Готово! 🎉 Мы нашли вас в базе клиентов Honey Flowers: ваш мёд и история сохранены.\n` +
+    (bonus > 0 ? `За регистрацию начислено ещё ${fmt(bonus)} мёда.\n` : '') +
+    `Номер карты: ${code}. Покажите QR из карты флористу при покупке.`,
+  help: 'Команды:\n/card — открыть медовую карту\n/help — как копить мёд\n/lang — язык / til\n/start — начать заново',
+  helpFull: (h: HelpInfo) =>
+    `🐝 Как работает «Медовые соты»\n\n` +
+    `🍯 Мёд — кешбэк с каждой покупки, 1 мёд = 1 сум. Уровни: ${h.levels.map((l) => `${l.title} ${l.pct}%`).join(' → ')}.\n` +
+    `🌸 Соты — покупка от ${fmt(h.minCell)} сум переносит пчёлку на следующую соту` +
+    (h.giftCells.length ? `; в сотах ${h.giftCells.join(', ')} ждут подарки-сюрпризы.\n` : '.\n') +
+    `💳 Мёдом можно оплатить до ${h.maxRedeemPct}% заказа.\n` +
+    `⏳ Мёд сгорает, если ${h.expiryDays} ${plural(h.expiryDays, ['день', 'дня', 'дней'])} не было покупок, — мы напомним заранее.\n\n` +
+    `Команды:\n/card — открыть медовую карту\n/lang — язык / til\n/help — эта подсказка` +
+    (h.owner ? '\n/stats — сводка для владельца' : ''),
+  helpButton: '🍯 Как копить мёд',
+  langButton: '🌐 Язык / Til',
+  statsButton: '📊 Сводка за сегодня',
+  ownerOnly: 'Эта команда доступна только владельцу 🐝',
   langPrompt: 'Выберите язык / Tilni tanlang:',
   langSet: 'Язык: русский 🇷🇺',
   // notifications
@@ -54,6 +81,9 @@ const ru = {
   expired: (amount: number, days: number) => `🥀 Сгорело ${fmt(amount)} мёда: не было покупок ${days} ${plural(days, ['день', 'дня', 'дней'])}.`,
   cardReset: 'Медовые соты начаты заново.',
   reversed: (reason: string) => `↩️ Покупка отменена: ${reason}. Мёд и соты пересчитаны.`,
+  giftGranted: (title: string, reason: string) => `🎁 Подарок от Honey Flowers: ${title}! Повод: ${reason}. Он ждёт вас в разделе «Подарки».`,
+  pointsGranted: (amount: number, balance: number, reason: string) =>
+    `🍯 Вам начислено ${fmt(amount)} мёда от Honey Flowers. Повод: ${reason}. Баланс: ${fmt(balance)} мёда.`,
   adjusted: (amount: number, balance: number, reason: string) =>
     `${amount > 0 ? '🍯 Начислено' : 'Списано'} ${fmt(Math.abs(amount))} мёда: ${reason}. Баланс: ${fmt(balance)} мёда.`,
 };
@@ -73,7 +103,24 @@ const uz: typeof ru = {
     (bonus > 0 ? `Tayyor! 🎉 Sizga sovg‘a sifatida ${fmt(bonus)} asal berildi.\n` : 'Tayyor! 🎉 Asal kartangiz yaratildi.\n') +
     `Karta raqami: ${code}. Xarid paytida floristga kartadagi QR kodni ko‘rsating.`,
   alreadyRegistered: (code: string) => `Siz allaqachon dastur ishtirokchisisiz. Karta raqami: ${code}.`,
-  help: 'Buyruqlar:\n/card — asal kartasini ochish\n/lang — til / язык\n/start — boshidan boshlash',
+  claimed: (bonus: number, code: string) =>
+    `Tayyor! 🎉 Sizni Honey Flowers mijozlari bazasidan topdik: asalingiz va tarixingiz saqlandi.\n` +
+    (bonus > 0 ? `Roʻyxatdan oʻtganingiz uchun yana ${fmt(bonus)} asal qoʻshildi.\n` : '') +
+    `Karta raqami: ${code}. Xarid paytida kartadagi QR kodni floristga koʻrsating.`,
+  help: 'Buyruqlar:\n/card — asal kartasini ochish\n/help — asal qanday yig‘iladi\n/lang — til / язык\n/start — boshidan boshlash',
+  helpFull: (h) =>
+    `🐝 «Asal kataklari» qanday ishlaydi\n\n` +
+    `🍯 Asal — har bir xariddan keshbek, 1 asal = 1 so‘m. Darajalar: ${h.levels.map((l) => `${l.title} ${l.pct}%`).join(' → ')}.\n` +
+    `🌸 Kataklar — ${fmt(h.minCell)} so‘mdan boshlab har bir xarid asalarini keyingi katakka olib o‘tadi` +
+    (h.giftCells.length ? `; ${h.giftCells.join(', ')}-kataklarda syurpriz sovg‘alar bor.\n` : '.\n') +
+    `💳 Buyurtmaning ${h.maxRedeemPct}% gacha qismini asal bilan to‘lash mumkin.\n` +
+    `⏳ ${h.expiryDays} kun davomida xarid bo‘lmasa, asal kuyadi — oldindan eslatamiz.\n\n` +
+    `Buyruqlar:\n/card — asal kartasini ochish\n/lang — til / язык\n/help — shu yordam` +
+    (h.owner ? '\n/stats — egasi uchun hisobot' : ''),
+  helpButton: '🍯 Asal qanday yig‘iladi',
+  langButton: '🌐 Til / Язык',
+  statsButton: '📊 Bugungi hisobot',
+  ownerOnly: 'Bu buyruq faqat do‘kon egasi uchun 🐝',
   langPrompt: ru.langPrompt,
   langSet: 'Til: o‘zbekcha 🇺🇿',
   accrued: (amount, balance) => `🍯 Xarid uchun +${fmt(amount)} asal. Balans: ${fmt(balance)} asal.`,
@@ -89,6 +136,8 @@ const uz: typeof ru = {
   expired: (amount, days) => `🥀 ${fmt(amount)} asal kuydi: ${days} kun davomida xarid bo‘lmadi.`,
   cardReset: 'Asal kataklari qaytadan boshlandi.',
   reversed: (reason) => `↩️ Xarid bekor qilindi: ${reason}. Asal va kataklar qayta hisoblandi.`,
+  giftGranted: (title, reason) => `🎁 Honey Flowers’dan sovg‘a: ${title}! Sabab: ${reason}. U «Sovg‘alar» bo‘limida sizni kutmoqda.`,
+  pointsGranted: (amount, balance, reason) => `🍯 Honey Flowers sizga ${fmt(amount)} asal berdi. Sabab: ${reason}. Balans: ${fmt(balance)} asal.`,
   adjusted: (amount, balance, reason) =>
     `${amount > 0 ? '🍯 Qo‘shildi' : 'Yechildi'} ${fmt(Math.abs(amount))} asal: ${reason}. Balans: ${fmt(balance)} asal.`,
 };
@@ -113,11 +162,50 @@ export const COMMANDS: Record<BotLang, Array<{ command: string; description: str
   ru: [
     { command: 'start', description: 'Начать / получить карту' },
     { command: 'card', description: 'Открыть медовую карту' },
+    { command: 'help', description: 'Как копить мёд' },
     { command: 'lang', description: 'Язык / Til' },
   ],
   uz: [
     { command: 'start', description: 'Boshlash / karta olish' },
     { command: 'card', description: 'Asal kartasini ochish' },
+    { command: 'help', description: 'Asal qanday yig‘iladi' },
     { command: 'lang', description: 'Til / Язык' },
   ],
 };
+
+// ---------------------------------------------------------------- owner /stats (Russian, like the staff screens)
+
+export interface PeriodStats {
+  purchases: number;
+  revenue: number;
+  newClients: number;
+  issued: number;
+  redeemed: number;
+}
+
+const MONTHS = ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
+/** 'YYYY-MM-DD' → '18 окт'. */
+export function shortDate(key: string): string {
+  const [, m, d] = key.split('-').map(Number);
+  return `${d} ${MONTHS[(m ?? 1) - 1]}`;
+}
+
+function periodBlock(title: string, p: PeriodStats): string {
+  return (
+    `${title}\n` +
+    `🛍 Покупок: ${p.purchases} · выручка ${fmt(p.revenue)} сум\n` +
+    `👋 Новых клиентов: ${p.newClients}\n` +
+    `🍯 Мёда начислено: ${fmt(p.issued)} · списано: ${fmt(p.redeemed)}`
+  );
+}
+
+export function ownerStatsText(today: { day: string; stats: PeriodStats }, week: { from: string; stats: PeriodStats }): string {
+  const quiet = today.stats.purchases === 0 && week.stats.purchases === 0;
+  return (
+    `📊 Сводка Honey Flowers\n\n` +
+    periodBlock(`Сегодня, ${shortDate(today.day)}:`, today.stats) +
+    `\n\n` +
+    periodBlock(`За неделю (с ${shortDate(week.from)}):`, week.stats) +
+    (quiet ? '\n\nПока тихо — пчёлки ждут первых покупок 🐝' : '\n\nПчёлки трудятся 🐝 Подробности — в приложении, раздел «Статистика».')
+  );
+}

@@ -6,10 +6,20 @@
 export const CSV_BOM = '\uFEFF';
 export const CSV_SEP = ';';
 
-/** Quote a cell when it contains the separator, a quote, a line break or leading/trailing spaces. */
+/** Text that Excel / LibreOffice would run as a formula (OWASP "CSV injection"). */
+const FORMULA_START = /^[=+\-@\t\r]/;
+/** Phone numbers (+998…) and signed numbers are data, not formulas: keep them as they are. */
+const NUMBER_LIKE = /^[+-]?\d[\d\s]*$/;
+
+/**
+ * Quote a cell when it contains the separator, a quote, a line break or leading/trailing spaces.
+ * Text starting with = + - @ (names, notes, reasons are typed by clients and staff) gets a leading
+ * apostrophe so the spreadsheet shows it as text instead of evaluating it.
+ */
 export function csvCell(v: string | number | null | undefined): string {
   if (v === null || v === undefined) return '';
-  const s = String(v);
+  let s = String(v);
+  if (typeof v === 'string' && FORMULA_START.test(s) && !NUMBER_LIKE.test(s)) s = `'${s}`;
   if (/[";\r\n]/.test(s) || s !== s.trim()) return `"${s.replace(/"/g, '""')}"`;
   return s;
 }
