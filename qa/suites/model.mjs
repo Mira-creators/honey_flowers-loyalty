@@ -383,6 +383,11 @@ class Runner {
       case 'adj': {
         const r = await as(OWNER).post(`/api/owner/clients/${c.id}/adjust`, { points: op.pts, reason: 'Модель', idempotencyKey: newKey('ma') });
         this.stats.requests++;
+        // audit UI-3: never below zero (after the overdue burn the server settles first); refused → nothing changes
+        if (m.balance(c) - m.dueBurn(c, now) + op.pts < 0) {
+          if (r.status !== 422) return this.diverge(i, op, c, 'adjust below zero', 422, `${r.status} ${r.text.slice(0, 200)}`);
+          return;
+        }
         if (r.status !== 200) return this.diverge(i, op, c, 'adjust', 200, `${r.status} ${r.text.slice(0, 200)}`);
         m.settle(c, now);
         c.ledger.push({ type: 'manual_adjust', amount: op.pts, purchaseId: null, createdAt: now });

@@ -211,9 +211,9 @@ export async function run() {
   const ad2 = await adj({ points: -500, reason: 'Ошибка' });
   s.eq('adjust −500', [ad2.status, ad2.body.client.balance], [200, balB + 500]);
   const adNeg = await adj({ points: -(balB + 10_000), reason: 'Списание' });
-  s.check('adjust below zero → allowed with a warning', adNeg.status === 200 && adNeg.body.client.balance === -9_500 && adNeg.body.warnings.length === 1, `${adNeg.status} ${adNeg.body?.client?.balance} ${JSON.stringify(adNeg.body?.warnings)}`);
-  note('question', 'Manual adjustment may take the balance below zero (only a warning). Should the owner be blocked instead?');
-  await adj({ points: 9_500 + balB, reason: 'Возврат' });
+  // audit UI-3 (27.11): a correction never takes the balance below zero
+  s.check('adjust below zero → refused (422), balance unchanged', adNeg.status === 422 && /не может уйти в минус/.test(adNeg.body?.error?.message ?? ''), `${adNeg.status} ${JSON.stringify(adNeg.body)}`);
+  await adj({ points: -500, reason: 'Возврат' });
   for (const [body, label] of [[{ points: 0, reason: 'ноль' }, 'zero'], [{ points: 5, reason: 'аб' }, 'reason < 3'], [{ points: 100_000_001, reason: 'много' }, '> maxPurchaseAmount'], [{ points: 1.5, reason: 'дробь' }, 'float'], [{ reason: 'нет' }, 'missing points']]) {
     s.eq(`adjust ${label} → 400`, (await adj(body)).status, 400);
   }
@@ -223,7 +223,7 @@ export async function run() {
   s.eq('note 500 chars with emoji/Uzbek ʻ ’ saved', [n1.status, n1.body.note], [200, longNote]);
   s.eq('note 501 chars → 400', (await as(OWNER).put(`/api/owner/clients/${bId}/note`, { note: longNote + 'x' })).status, 400);
   const card = (await as(OWNER).get(`/api/owner/clients/${bId}`)).body;
-  s.eq('client card: full phone, note, telegramId, history incl. manual', [card.phone, card.note, card.telegramId, card.history.filter((h) => h.kind === 'manual').length], ['+998911112233', longNote, B, 4]);
+  s.eq('client card: full phone, note, telegramId, history incl. manual', [card.phone, card.note, card.telegramId, card.history.filter((h) => h.kind === 'manual').length], ['+998911112233', longNote, B, 3]);
   s.eq('note "" clears it', (await as(OWNER).put(`/api/owner/clients/${bId}/note`, { note: '   ' })).body.note, null);
   s.eq('client card unknown → 404', (await as(OWNER).get('/api/owner/clients/nope')).status, 404);
   await invariantsStep('adjust/note');
