@@ -54,16 +54,23 @@ export const THEMES: Record<string, Theme> = {
     cell: 'hex',
     light: { bg: '#FFFEFA', surface: '#FFFFFF', surface2: '#F7F5EC', ink: '#1F261B', muted: '#68705F', line: '#E4E7D8',
       accent: '#F49A00', 'accent-deep': '#A85F00', 'on-accent': '#241500', comb: '#F7BE4F', 'comb-hi': '#FFE3A1', cell: '#FFFFFF', 'cell-line': '#CFDDC2',
-      petal: '#F4B3C2', 'petal-deep': '#D24D6E', good: '#3E7A3A', bad: '#B8402F', notif: '#1F261B', 'notif-ink': '#FFFCF2',
+      petal: '#F4B3C2', 'petal-deep': '#B93A5B', good: '#3E7A3A', bad: '#B8402F', notif: '#1F261B', 'notif-ink': '#FFFCF2',
       'bee-body': '#F6B400', 'bee-line': '#1C1C17', 'bee-stripe': '#1C1C17', wing: '#FFFFFF', leaf: '#6A9A52', 'leaf-deep': '#3E7A3A',
       wash: 'radial-gradient(110% 55% at 0% 0%, rgba(106,154,82,.08), transparent 62%), radial-gradient(90% 45% at 100% 100%, rgba(210,77,110,.06), transparent 60%)',
-      'comb-wash': 'radial-gradient(80% 70% at 30% 20%, rgba(247,190,79,.16), transparent 70%), radial-gradient(70% 60% at 85% 90%, rgba(106,154,82,.10), transparent 70%)' },
+      'comb-wash': 'radial-gradient(80% 70% at 30% 20%, rgba(247,190,79,.16), transparent 70%), radial-gradient(70% 60% at 85% 90%, rgba(106,154,82,.10), transparent 70%)',
+      // Дизайн-система (B1): мягкие подложки, предупреждение, затемнение, тень, фокус.
+      'on-bad': '#FFFFFF', 'on-petal': '#3A1420', 'on-good': '#FFFFFF', warn: '#9A5A00',
+      'accent-soft': '#FFF7E8', 'good-soft': '#EAF3E4', 'bad-soft': '#FBEAE6', 'warn-soft': '#FFF2D6', 'petal-soft': '#FCE9EE', 'leaf-soft': '#EEF4E8',
+      scrim: 'rgba(20,24,16,.48)', shadow: 'rgba(31,38,27,.16)', focus: '#3E7A3A', 'qr-bg': '#FFFFFF', skel: '#EFEEE4', 'skel-hi': '#F8F7F0' },
     dark: { bg: '#131911', surface: '#1B2318', surface2: '#232E20', ink: '#F3F1E6', muted: '#ADB5A1', line: '#33402E',
       accent: '#F7A928', 'accent-deep': '#FFC566', 'on-accent': '#1C1200', comb: '#A86C0A', 'comb-hi': '#D9952A', cell: '#1B2318', 'cell-line': '#3B4A34',
       petal: '#E58BA1', 'petal-deep': '#F3A6B9', good: '#8DC17F', bad: '#F08A76', notif: '#F3F1E6', 'notif-ink': '#131911',
       'bee-body': '#F6B400', 'bee-line': '#0D110C', 'bee-stripe': '#0D110C', wing: '#E9F0E2', leaf: '#7FB069', 'leaf-deep': '#9FCC89',
       wash: 'radial-gradient(110% 55% at 0% 0%, rgba(127,176,105,.08), transparent 62%), radial-gradient(90% 45% at 100% 100%, rgba(229,139,161,.06), transparent 60%)',
-      'comb-wash': 'radial-gradient(80% 70% at 30% 20%, rgba(247,169,40,.10), transparent 70%)' },
+      'comb-wash': 'radial-gradient(80% 70% at 30% 20%, rgba(247,169,40,.10), transparent 70%)',
+      'on-bad': '#1A0B07', 'on-petal': '#2A0F18', 'on-good': '#10190E', warn: '#FFC566',
+      'accent-soft': '#3A2C10', 'good-soft': '#223221', 'bad-soft': '#3A211C', 'warn-soft': '#3A2E14', 'petal-soft': '#3A2028', 'leaf-soft': '#22301E',
+      scrim: 'rgba(0,0,0,.6)', shadow: 'rgba(0,0,0,.5)', focus: '#9FCC89', 'qr-bg': '#FFFFFF', skel: '#232E20', 'skel-hi': '#2D3A29' },
     bloom: cloverBloom,
     mascot: BEE,
   },
@@ -120,11 +127,31 @@ export const THEMES: Record<string, Theme> = {
 /** Тема по умолчанию. В TEST_MODE её можно переключить на панели тестирования. */
 export const ACTIVE_THEME = 'clover';
 
+/**
+ * Роли цветов дизайн-системы (B1), которых может не быть в теме: выводятся из основных.
+ * Полный список ролей и где их применять — src/ui/README.md.
+ */
+export const COLOR_ROLES = ['bg', 'surface', 'surface2', 'ink', 'muted', 'line', 'accent', 'accent-deep', 'on-accent', 'accent-soft',
+  'leaf', 'leaf-deep', 'leaf-soft', 'petal', 'petal-deep', 'petal-soft', 'on-petal', 'good', 'good-soft', 'on-good', 'bad', 'bad-soft', 'on-bad',
+  'warn', 'warn-soft', 'scrim', 'shadow', 'focus', 'notif', 'notif-ink', 'qr-bg', 'knob', 'skel', 'skel-hi'] as const;
+
+function themeDefaults(pal: Record<string, string>, dark: boolean): Record<string, string> {
+  const mix = (c: string, pct: number) => `color-mix(in srgb, ${c} ${pct}%, ${pal.surface})`;
+  return {
+    'comb-hi': pal.comb, leaf: pal.good, 'leaf-deep': pal.good, wash: 'none', 'comb-wash': 'none',
+    'on-bad': '#FFFFFF', 'on-petal': pal.ink, 'on-good': '#FFFFFF', warn: pal['accent-deep'],
+    'accent-soft': mix(pal.accent, 16), 'good-soft': mix(pal.good, 14), 'bad-soft': mix(pal.bad, 14), 'warn-soft': mix(pal.accent, 22),
+    'petal-soft': mix(pal.petal, 30), 'leaf-soft': mix(pal.good, 12),
+    scrim: dark ? 'rgba(0,0,0,.6)' : 'rgba(15,10,4,.5)', shadow: dark ? 'rgba(0,0,0,.5)' : 'rgba(0,0,0,.16)', focus: pal.accent,
+    'qr-bg': '#FFFFFF', knob: '#FFFFFF', skel: pal.surface2, 'skel-hi': pal.surface,
+  };
+}
+
 export function applyTheme(id: string, dark: boolean, root: HTMLElement = document.documentElement): Theme {
   const th = THEMES[id] ?? THEMES[ACTIVE_THEME];
   const pal = dark ? th.dark : th.light;
   // Optional entries (themes before «Клевер» do not define them).
-  const full: Record<string, string> = { 'comb-hi': pal.comb, leaf: pal.good, 'leaf-deep': pal.good, wash: 'none', 'comb-wash': 'none', ...pal };
+  const full: Record<string, string> = { ...themeDefaults(pal, dark), ...pal };
   for (const k in full) root.style.setProperty('--c-' + k, full[k]);
   root.style.setProperty('--font-display', th.fonts.display);
   root.style.setProperty('--font-body', th.fonts.body);

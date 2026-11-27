@@ -83,6 +83,9 @@ export const TEXTS = {
     newGift: 'Новый подарок! Загляните в раздел «Подарки».',
     errorTitle: 'Не получилось загрузить карту',
     retry: 'Повторить',
+    // Дизайн-система (ui/kit.ts): общие состояния экранов.
+    netOff: 'Нет интернета. Показываем последние данные', netBack: 'Связь восстановлена', loading: 'Загружаем…',
+    loadErrTitle: 'Не получилось загрузить', loadErrText: 'Проверьте интернет и попробуйте ещё раз.', close: 'Закрыть',
   },
   uz: {
     months: ['yanvar', 'fevral', 'mart', 'aprel', 'may', 'iyun', 'iyul', 'avgust', 'sentabr', 'oktabr', 'noyabr', 'dekabr'],
@@ -160,6 +163,8 @@ export const TEXTS = {
     newGift: "Yangi sovg'a! «Sovg'alar» bo'limiga qarang.",
     errorTitle: 'Kartani yuklab bo‘lmadi',
     retry: 'Qayta urinish',
+    netOff: 'Internet yo‘q. Oxirgi ma’lumotlar ko‘rsatilmoqda', netBack: 'Aloqa tiklandi', loading: 'Yuklanmoqda…',
+    loadErrTitle: 'Yuklab bo‘lmadi', loadErrText: 'Internetni tekshiring va qayta urinib ko‘ring.', close: 'Yopish',
   },
 };
 export type Texts = typeof TEXTS.ru;
