@@ -1,0 +1,17 @@
+# Throwaway Worker for D1 checks (C3 / M0). NOT connected to GitHub, deployed by hand.
+# Its database honey-m0 is separate from the polygon (honey-loyalty) and the customer DB.
+name = "honey-m0"
+main = "worker.js"
+compatibility_date = "2026-10-01"
+workers_dev = true
+
+[observability]
+enabled = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "honey-m0"
+# Paste the id printed by `npx wrangler d1 create honey-m0` here:
+database_id = "PASTE-DATABASE-ID-HERE"
+
+# Secret (not in this file): PROBE_KEY — `npx wrangler secret put PROBE_KEY`
