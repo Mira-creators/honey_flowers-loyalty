@@ -16,6 +16,16 @@ export function toEditable(rules: LoyaltyRules): EditableRulesDTO {
     expiryWarnDays: [...rules.expiry.expiryWarnDays].sort((a, b) => b - a),
     welcomeBonus: rules.welcomeBonus,
     reversalWindowHours: rules.reversalWindowHours,
+    staffCanReverse: rules.staffCanReverse,
+    levelMode: rules.levels.mode,
+    levelBy: rules.levels.criterion,
+    levelWindowDays: rules.levels.windowDays,
+    levelResetDays: rules.levels.resetAfterDays ?? rules.levels.windowDays ?? 90,
+    levelResetWarnDays: [...rules.levels.resetWarnDays].sort((a, b) => b - a),
+    birthdayEnabled: rules.birthdayReward.enabled,
+    birthdayPct: rules.birthdayReward.value,
+    birthdayDaysBefore: rules.birthdayReward.daysBefore,
+    birthdayDaysAfter: rules.birthdayReward.daysAfter,
     cells: rules.honeycomb.cells,
     gifts: giftLayout(rules.honeycomb.rewards),
     version: rules.version,
@@ -46,6 +56,17 @@ export const editableRulesSchema = z
     // Owner decision (item 8): staff may reverse a purchase only within N hours. Older Mini App builds
     // do not send it: keep the current value then.
     reversalWindowHours: int(1, 720).optional(),
+    // Fields added with the owner's rules (0011). Older Mini App builds do not send them: keep the current values.
+    staffCanReverse: z.boolean().optional(),
+    levelMode: z.enum(['rolling', 'sticky']).optional(),
+    levelBy: z.enum(['sum', 'count']).optional(),
+    levelWindowDays: int(1, 3650).nullable().optional(),
+    levelResetDays: int(1, 3650).optional(),
+    levelResetWarnDays: z.array(int(1, 365)).max(5).optional(),
+    birthdayEnabled: z.boolean().optional(),
+    birthdayPct: z.number().min(1).max(100).optional(),
+    birthdayDaysBefore: int(0, 30).optional(),
+    birthdayDaysAfter: int(0, 30).optional(),
     cells: int(1, 50),
     gifts: z.record(z.string().regex(/^\d{1,2}$/), z.string().regex(GIFT_CODE_RE, 'card | delivery | mini | discN')),
     version: z.number().int().positive(),
@@ -72,6 +93,12 @@ export const editableRulesSchema = z
     if (r.expiryWarnDays.some((d) => d >= r.expiryDays)) {
       ctx.addIssue({ code: 'custom', path: ['expiryWarnDays'], message: 'напоминание должно быть раньше срока сгорания' });
     }
+    if (r.levelResetDays !== undefined && r.levelResetWarnDays?.some((d) => d >= r.levelResetDays!)) {
+      ctx.addIssue({ code: 'custom', path: ['levelResetWarnDays'], message: 'напоминание должно быть раньше сброса уровня' });
+    }
+    if (r.levelResetWarnDays && new Set(r.levelResetWarnDays).size !== r.levelResetWarnDays.length) {
+      ctx.addIssue({ code: 'custom', path: ['levelResetWarnDays'], message: 'дни напоминаний повторяются' });
+    }
   });
 
 /**
@@ -86,16 +113,42 @@ export function applyEditable(current: LoyaltyRules, input: unknown): LoyaltyRul
   if (e.cells !== current.honeycomb.cells) {
     throw new HttpError(400, 'validation', `Количество ячеек пока фиксировано: ${current.honeycomb.cells}`);
   }
+  const lv = current.levels;
+  const criterion = e.levelBy ?? lv.criterion;
+  const windowDays = e.levelWindowDays !== undefined ? e.levelWindowDays : lv.windowDays;
+  const mode = e.levelMode ?? lv.mode;
+  // A day window replaces a month window; «за всё время» (null) clears both.
+  const windowMonths = windowDays !== null || e.levelWindowDays === null ? null : lv.windowMonths;
+  const hasWindow = windowDays !== null || windowMonths !== null;
+  // «все заказы за день — одна покупка» (count + a window); switching to count turns it on.
+  const oncePerDay = criterion === 'count' && hasWindow ? (criterion === lv.criterion ? lv.oncePerDay : true) : false;
+  const br = current.birthdayReward;
   const next: LoyaltyRules = {
     ...current,
     version: current.version + 1,
     levels: {
-      ...current.levels,
+      ...lv,
+      criterion,
+      windowDays,
+      windowMonths,
+      oncePerDay,
+      mode,
+      resetAfterDays: mode === 'sticky' ? e.levelResetDays ?? lv.resetAfterDays ?? windowDays ?? 90 : lv.resetAfterDays,
+      resetWarnDays: e.levelResetWarnDays ? [...e.levelResetWarnDays].sort((a, b) => b - a) : lv.resetWarnDays,
       tiers: e.levels.map((l) => ({ id: l.id, title: l.name, cashbackPct: l.pct, threshold: l.from })),
     },
     maxRedeemPct: e.maxRedeemPct,
     welcomeBonus: e.welcomeBonus,
     reversalWindowHours: e.reversalWindowHours ?? current.reversalWindowHours,
+    staffCanReverse: e.staffCanReverse ?? current.staffCanReverse,
+    birthdayReward: {
+      ...br,
+      enabled: e.birthdayEnabled ?? br.enabled,
+      type: e.birthdayPct !== undefined ? 'discount_pct' : br.type,
+      value: e.birthdayPct ?? br.value,
+      daysBefore: e.birthdayDaysBefore ?? br.daysBefore,
+      daysAfter: e.birthdayDaysAfter ?? br.daysAfter,
+    },
     honeycomb: {
       ...current.honeycomb,
       minPurchaseForCell: e.minPurchaseForCell,
@@ -110,6 +163,13 @@ export function applyEditable(current: LoyaltyRules, input: unknown): LoyaltyRul
       expiryWarnDays: [...e.expiryWarnDays].sort((a, b) => b - a),
     },
   };
-  // Final check with the engine's own schema (same rules as packages/core).
-  return parseRules(JSON.parse(JSON.stringify(next)));
+  // Final check with the engine's own schema (same rules as packages/core), errors in Russian.
+  try {
+    return parseRules(JSON.parse(JSON.stringify(next)));
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (/resetAfterDays|resetWarnDays/.test(msg)) throw new HttpError(400, 'validation', 'Проверьте срок сохранения уровня и дни напоминаний о нём');
+    if (/oncePerDay|windowDays|windowMonths/.test(msg)) throw new HttpError(400, 'validation', 'Проверьте период, за который считаются покупки для уровня');
+    throw err;
+  }
 }

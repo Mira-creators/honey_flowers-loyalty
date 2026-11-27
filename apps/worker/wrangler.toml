@@ -14,6 +14,7 @@ keep_vars = true
 "@honey/core" = "../../packages/core/src/index.ts"
 "@honey/service" = "../../packages/service/src/index.ts"
 "@honey/contracts" = "../../packages/contracts/src/index.ts"
+"@honey/stock" = "../../packages/stock/src/index.ts"
 
 [observability]
 enabled = true
@@ -64,6 +65,10 @@ BOT_USERNAME = ""
 ALERT_CHAT_ID = ""
 # "1" = after every nightly run also send a short «Ночная задача: ок …» message.
 ALERT_DAILY = "0"
+# «Склад» (stock module prototype): "1" = /api/stock/* and the stock screens are on. On the dev polygon
+# (and locally) "1"; scripts/select-env.mjs writes "0" for the client Worker (branch main) unless the
+# BUILD variable STOCK_ENABLED=1 is set there. Off → every stock route answers 404.
+STOCK_ENABLED = "1"
 # Shown in alerts and GET /health; scripts/select-env.mjs sets it to "<worker> (<branch>)" on build.
 ENV_NAME = "honey-loyalty (local)"
 

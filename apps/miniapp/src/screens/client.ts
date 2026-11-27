@@ -9,6 +9,8 @@ import { esc, fmt, toast, modal, confetti, sleep } from '../ui/dom';
 import { IC } from '../ui/icons';
 import { combSVG, fly, beeAt, dropToBalance, countUp, giftSvg } from '../ui/comb';
 import { qrSvg } from '../ui/qr';
+import { mascotG, mascotSvg } from '../ui/mascot';
+import { consentBlock, giveConsent, logoImg } from './legal';
 
 const th = () => THEMES[S.themeId];
 /** Chat that takes orders (from the shop's channel description). Change here if the shop changes it. */
@@ -20,6 +22,7 @@ const dayStr = (ymd: string) => { const [, m, d] = ymd.split('-').map(Number); r
 // Owner-edited names win; the uz table only translates the default level ids.
 const lvName = (l: LevelInfo) => (S.lang === 'uz' && L().levels[l.id]) ? L().levels[l.id] : l.name;
 const giftText = (type: string) => L().giftTypes[type] ?? { t: type, p: '' };
+const giftTitle = (g: GiftDTO) => g.source === 'birthday' ? L().bdayGift(Number(/^disc(\d+)$/.exec(g.type)?.[1] ?? 10)) : giftText(g.type).t;
 const giftCells = (c: ClientSummaryDTO) => Object.keys(c.card.gifts).map(Number).sort((a, b) => a - b);
 
 /* ---------------- views ---------------- */
@@ -37,17 +40,40 @@ function tabs(c: ClientSummaryDTO) {
     `<button data-act="tab" data-tab="${k}" ${S.screen === k ? 'aria-current="page"' : ''}>${IC[k]}${t[k]}${k === 'gifts' && avail ? `<span class="dot">${avail}</span>` : ''}</button>`).join('')}</nav>`;
 }
 
+/** Л3: always visible — until when the level is kept and when the мёд burns (separate timers). */
+function timersBlock(c: ClientSummaryDTO): string {
+  const t = L(), r = S.me!.rules;
+  const level = c.levelKeptUntil ? t.levelKept(dayStr(c.levelKeptUntil)) : r.levelResetDays ? t.levelKeepRule(r.levelResetDays) : '';
+  const honey = c.expiresOn && c.balance > 0 ? t.honeyBurns(dayStr(plusDay(c.expiresOn))) : t.honeyRule(r.expiryDays);
+  return `<div class="timers">${level ? `<div>${level}</div>` : ''}<div>${honey}</div></div>`;
+}
+/** 'YYYY-MM-DD' + 1 day: the day the мёд burns is the day after the last valid one. */
+const plusDay = (ymd: string) => new Date(Date.parse(ymd + 'T00:00:00Z') + 86_400_000).toISOString().slice(0, 10);
+
+/** Л6: an optional «укажите день рождения» card after registration (once per session). */
+function birthdayCard(c: ClientSummaryDTO): string {
+  const r = S.me!.rules, t = L();
+  if (c.birthday || !r.birthdayPct || S.bdayDismissed) return '';
+  return `<div class="bday-card"><div class="t">🎂 ${t.bdayTitle}</div><p>${t.bdayAsk(r.birthdayPct, r.birthdayDaysBefore)}</p>
+    <div class="bday-row"><input type="date" id="bdayInput" max="${new Date().toISOString().slice(0, 10)}" min="1920-01-01" aria-label="${t.bdayTitle}"><button class="b acc" data-act="saveBirthday">${t.bdaySave}</button></div>
+    <button class="link" data-act="skipBirthday">${t.bdaySkip}</button></div>`;
+}
+
 export function homeView(c: ClientSummaryDTO, shown?: { filled?: number; justFilled?: number; balance?: number }) {
   const t = L(), lv = c.level, nx = c.next;
   const filled = shown?.filled ?? c.card.filled, bal = shown?.balance ?? c.balance;
-  const pct = nx ? Math.max(3, Math.min(100, (c.spent - lv.from) / Math.max(1, nx.from - lv.from) * 100)) : 100;
+  // count levels: the bar shows purchase days in the window out of the next threshold
+  const pct = nx ? Math.max(3, Math.min(100, c.levelBy === 'count' ? c.spent / Math.max(1, nx.from) * 100 : (c.spent - lv.from) / Math.max(1, nx.from - lv.from) * 100)) : 100;
+  const leftTxt = nx ? (c.levelBy === 'count' ? t.leftCount(nx.left) : t.left(fmt(nx.left))) : t.topNote;
   const avail = c.gifts.filter(g => g.status === 'available').length;
   const ahead = giftCells(c).filter(n => n > filled).length;
   return `
-    <div class="top-row"><h2 class="disp">${esc(t.hello(c.name))}</h2><span class="lvl"><i><svg viewBox="-24 -24 48 40" width="16" aria-hidden="true">${th().mascot(0.55)}</svg></i>${esc(lvName(lv))} · ${lv.pct}%</span></div>
+    <div class="top-row">${logoImg('logo-sm')}<h2 class="disp">${esc(t.hello(c.name))}</h2><span class="lvl"><i><svg viewBox="-24 -24 48 40" width="16" aria-hidden="true">${mascotG('sitting', 0.55)}</svg></i>${esc(lvName(lv))} · ${lv.pct}%</span></div>
     <div class="comb-card"><div class="comb-meta"><span>${t.cardMeta(c.card.cycle, filled, c.card.cells)}</span><span>${t.ahead(ahead)}</span></div>${combSVG(th(), c.card, filled, shown?.justFilled)}</div>
     <div class="bal" id="bal"><span class="l">${t.balLbl}</span><span class="n" id="balN">${fmt(bal)}<small>${t.unit}</small></span><span class="e">${c.expiresOn && c.balance > 0 ? t.until(dayStr(c.expiresOn)) : ''}</span></div>
-    <div class="prog"><div class="r"><span>${nx ? esc(t.toLevel(lvName(nx), nx.pct)) : t.top}</span><b>${nx ? t.left(fmt(nx.left)) : t.topNote}</b></div><div class="track"><i style="width:${pct}%"></i></div></div>
+    <div class="prog"><div class="r"><span>${nx ? esc(t.toLevel(lvName(nx), nx.pct)) : t.top}</span><b>${leftTxt}</b></div><div class="track"><i style="width:${pct}%"></i></div>${c.levelBy === 'count' && S.me!.rules.levelWindowDays ? `<div class="mut tiny">${t.countNote(S.me!.rules.levelWindowDays)}</div>` : ''}</div>
+    ${timersBlock(c)}
+    ${birthdayCard(c)}
     <div class="grid2">
       <button class="b" data-act="tab" data-tab="card">${IC.card}${t.myCard}</button>
       <button class="b" data-act="tab" data-tab="gifts">${IC.gifts}${t.gifts}${avail ? `<span class="cnt">${avail}</span>` : ''}</button>
@@ -61,7 +87,7 @@ function cardView(c: ClientSummaryDTO) {
 
 function giftsView(c: ClientSummaryDTO) {
   const t = L();
-  const rows = c.gifts.map((g: GiftDTO) => `<div class="it ${g.status !== 'available' ? 'dim' : ''}"><div class="ic">${giftSvg}</div><div><div class="t">${esc(giftText(g.type).t)}</div><div class="s">${g.status === 'available' ? t.giftAvail : g.status === 'used' ? t.giftUsed(g.usedAt ? dstr(g.usedAt) : '') : t.giftRevoked}${g.reason ? ' · ' + esc(g.reason) : ''}</div></div><span class="mut">${g.status === 'available' ? '🎁' : g.status === 'used' ? '✓' : '—'}</span></div>`).join('');
+  const rows = c.gifts.map((g: GiftDTO) => `<div class="it ${g.status !== 'available' ? 'dim' : ''}"><div class="ic">${g.source === 'birthday' ? '🎂' : giftSvg}</div><div><div class="t">${esc(giftTitle(g))}</div><div class="s">${g.status === 'available' ? (g.validUntil ? t.giftUntil(dayStr(g.validUntil)) + ' · ' : '') + t.giftAvail : g.status === 'used' ? t.giftUsed(g.usedAt ? dstr(g.usedAt) : '') : g.source === 'birthday' ? '—' : t.giftRevoked}${g.reason ? ' · ' + esc(g.reason) : ''}</div></div><span class="mut">${g.status === 'available' ? '🎁' : g.status === 'used' ? '✓' : '—'}</span></div>`).join('');
   const locked = giftCells(c).filter(n => n > c.card.filled).map(() => `<div class="it lock"><div class="ic">?</div><div><div class="t">${t.surprise}</div><div class="s">${t.surpriseHint}</div></div><span></span></div>`).join('');
   return `<h2 class="h disp">${t.gifts}</h2><div class="list">${rows || `<p class="mut" style="margin:0 0 4px">${t.noGifts}</p>`}${locked}</div>`;
 }
@@ -81,6 +107,8 @@ export function histRow(h: HistoryItemDTO, t: Texts = L()) {
 function profileView(c: ClientSummaryDTO) {
   const t = L();
   return `<div class="prof"><div class="ava">${esc(c.name.slice(0, 1).toUpperCase())}</div><div><div class="disp" style="font-size:18px">${esc(c.name)}</div><div class="mut">${esc(c.phoneMasked)} · ${esc(lvName(c.level))}</div></div></div>
+    <div class="sub">${t.bdayTitle}</div>${c.birthday ? `<p class="mut" style="margin:0">${t.bdayIs(dayStr(c.birthday))} · ${t.bdayOnce}</p>` : `<div class="bday-row"><input type="date" id="bdayInput" max="${new Date().toISOString().slice(0, 10)}" min="1920-01-01" aria-label="${t.bdayTitle}"><button class="b acc" data-act="saveBirthday">${t.bdaySave}</button></div><p class="mut tiny">${t.bdayOnce}</p>`}
+    <div class="legal-links"><button class="link" data-act="openLegal" data-page="rules">📄 ${t.rulesLink}</button><button class="link" data-act="openLegal" data-page="consent">🔒 ${t.consentLink}</button></div>
     <div class="sub">${t.lang}</div><div class="langs"><button data-act="lang" data-l="ru" aria-pressed="${S.lang === 'ru'}">Русский</button><button data-act="lang" data-l="uz" aria-pressed="${S.lang === 'uz'}">O'zbekcha</button></div>
     <div class="sub">${t.history}</div><div class="list">${c.history.length ? c.history.map(h => histRow(h)).join('') : `<p class="mut">${t.noHistory}</p>`}</div>`;
 }
@@ -88,18 +116,21 @@ function profileView(c: ClientSummaryDTO) {
 function onboarding() {
   const t = L(), me = S.me!;
   const browser = !tg.inTelegram;
-  return `<main class="scr"><div class="onb">
-    <svg viewBox="-34 -34 68 56" width="132" aria-hidden="true"><g class="bee-idle">${th().mascot(1.5)}</g></svg>
+  const ok = S.consentChecked;
+  return `<main class="scr" id="scr"><div class="onb">
+    ${logoImg()}
+    <div class="onb-bee" aria-hidden="true">${mascotSvg('flying', 1.1, 'bee-idle')}</div>
     <h2 class="disp">${t.onbTitle}</h2><p>${t.onbText}</p>
     ${me.rules.welcomeBonus > 0 ? `<div class="gift-pill">${t.onbGift(fmt(me.rules.welcomeBonus))}</div>` : ''}
+    ${consentBlock()}
     ${browser && me.testMode ? `
       <div class="form" style="width:100%">
         <label class="fl" for="regName">Имя</label><input id="regName" value="${esc(me.firstName || '')}" autocomplete="off">
         <label class="fl" for="regPhone">Телефон</label><input id="regPhone" inputmode="tel" value="+998 90 " autocomplete="off">
-        <button class="b acc full" data-act="testRegister" style="margin-top:8px">Зарегистрироваться (тест без Telegram)</button>
+        <button class="b acc full" data-act="testRegister" style="margin-top:8px" ${ok ? '' : 'disabled'}>Зарегистрироваться (тест без Telegram)</button>
       </div>` : `
-      <button class="b acc full" data-act="share" ${S.waitingContact ? 'disabled' : ''} style="margin-top:6px">${S.waitingContact ? t.waiting : t.share}</button>`}
-    <p class="consent">${t.consent}</p></div></main>`;
+      <button class="b acc full" data-act="share" ${S.waitingContact || !ok ? 'disabled' : ''} style="margin-top:6px">${S.waitingContact ? t.waiting : t.share}</button>`}
+    ${ok ? '' : `<p class="consent">${t.mustAccept}</p>`}</div></main>`;
 }
 
 /* ---------------- actions ---------------- */
@@ -111,6 +142,7 @@ actions.lang = async el => {
   try { await api.setLang({ lang: l }); } catch (e) { toast((e as ApiErr).message, 'error'); }
 };
 actions.share = async () => {
+  if (!(await giveConsent())) return;
   S.waitingContact = true; app.render();
   const ok = await tg.requestContact();
   if (!ok) { S.waitingContact = false; app.render(); toast(L().shareFailed, 'error'); return; }
@@ -126,8 +158,16 @@ actions.testRegister = async () => {
   const name = (document.getElementById('regName') as HTMLInputElement).value.trim();
   const phone = (document.getElementById('regPhone') as HTMLInputElement).value.trim();
   if (!name || phone.replace(/\D/g, '').length < 12) { toast('Введите имя и телефон в формате +998 XX XXX XX XX', 'error'); return; }
+  if (!(await giveConsent())) return;
   try { await api.test.register(phone, name); await app.refresh(); } catch (e) { toast((e as ApiErr).message, 'error'); }
 };
+actions.saveBirthday = async () => {
+  const v = (document.getElementById('bdayInput') as HTMLInputElement | null)?.value ?? '';
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) { toast(L().bdayTitle + ': ДД.ММ.ГГГГ', 'error'); return; }
+  try { S.me = await api.setBirthday(v); toast(L().bdaySaved, 'ok'); tg.haptic('success'); app.render(); }
+  catch (e) { toast((e as ApiErr).message, 'error'); }
+};
+actions.skipBirthday = () => { S.bdayDismissed = true; app.render(); };
 
 /* ---------------- live updates: animate what changed since the last snapshot ---------------- */
 export async function animateClientChange(prev: ClientSummaryDTO, next: ClientSummaryDTO) {
@@ -171,7 +211,7 @@ export async function animateClientChange(prev: ClientSummaryDTO, next: ClientSu
     for (const g of newGifts) { await sleep(400); await giftModal(g); }
     if (lvlUp) {
       await sleep(400);
-      await modal(`<div class="k">${t.mLvlK}</div><h3 class="disp">${esc(lvName(next.level))} · ${next.level.pct}%</h3><p>${t.mLvlP(next.level.pct)}</p>`, t.mLvlB);
+      await modal(`${mascotSvg('celebrating', 1.4)}<div class="k">${t.mLvlK}</div><h3 class="disp">${esc(lvName(next.level))} · ${next.level.pct}%</h3><p>${t.mLvlP(next.level.pct)}</p>`, t.mLvlB);
       confetti();
     }
   } finally { S.animating = false; }
@@ -179,7 +219,7 @@ export async function animateClientChange(prev: ClientSummaryDTO, next: ClientSu
 
 function giftModal(g: GiftDTO) {
   const t = L(), gt = giftText(g.type); let opened = false;
-  return modal(`<div class="k">${g.source === 'grant' ? t.mGrantK : t.mGiftK(g.cell)}</div><div class="flip" id="flip"><div class="flip-in"><div class="face front"><span class="q">?</span></div><div class="face back">${giftSvg}<b>${esc(gt.t)}</b></div></div></div><p>${esc(gt.p)}${g.reason ? `<br><b>${esc(g.reason)}</b>` : ''}</p>`, t.mOpen, () => {
+  return modal(`<div class="k">${g.source === 'grant' ? t.mGrantK : g.source === 'birthday' ? t.mBdayK : t.mGiftK(g.cell)}</div><div class="flip" id="flip"><div class="flip-in"><div class="face front"><span class="q">?</span></div><div class="face back">${giftSvg}<b>${esc(giftTitle(g))}</b></div></div></div><p>${esc(g.source === 'birthday' ? t.bdayGiftHint : gt.p)}${g.reason ? `<br><b>${esc(g.reason)}</b>` : ''}</p>`, t.mOpen, () => {
     if (!opened) { opened = true; document.getElementById('flip')?.classList.add('on'); const b = document.getElementById('mBtn'); if (b) b.textContent = t.mTake; confetti(); tg.haptic('success'); return false; }
   });
 }

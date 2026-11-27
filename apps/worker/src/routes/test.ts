@@ -8,6 +8,7 @@ import type { Env } from '../env.js';
 import { countingD1, SubrequestBudget } from '../lib/budget.js';
 import { runDailyJobMonitored } from '../lib/monitor.js';
 import { D1Repository } from '../db/d1Repository.js';
+import { CONSENT_VERSION, requireConsent } from '../lib/legal.js';
 import { HttpError } from '../lib/errors.js';
 import { buildMe } from '../lib/summary.js';
 
@@ -66,7 +67,7 @@ testRoutes.post('/reset-me', async (c) => {
 testRoutes.post('/register', async (c) => {
   const app = c.get('app');
   const caller = c.get('caller');
-  const body = z.object({ phone: z.string().min(4).max(30), name: z.string().trim().min(1).max(60) }).parse(await c.req.json());
+  const body = z.object({ phone: z.string().min(4).max(30), name: z.string().trim().min(1).max(60), consent: z.boolean().optional() }).parse(await c.req.json());
   const phone = normalizePhone(body.phone);
   if (!phone) throw new HttpError(400, 'validation', 'Не похоже на номер телефона');
   // A browser tester (X-Test-User) proves nothing about the phone: it must not take over a
@@ -74,8 +75,11 @@ testRoutes.post('/register', async (c) => {
   if (caller.via === 'testHeader' && (await app.repo.findStaffByPhone(phone))) {
     throw new HttpError(403, 'forbidden', 'Этот номер принадлежит сотруднику: зарегистрируйтесь через Telegram');
   }
+  // Д1: no card without the accepted rules + consent (given before, or `consent: true` in this call).
+  if (body.consent) await app.repo.setTgConsent(caller.telegramId, CONSENT_VERSION, app.now());
+  const consent = await requireConsent(app, caller.telegramId);
   const user = await app.repo.getTgUser(caller.telegramId);
-  await app.service.registerWithPhone({ telegramId: caller.telegramId, name: body.name, phone, language: user?.language ?? 'ru' });
+  await app.service.registerWithPhone({ telegramId: caller.telegramId, name: body.name, phone, language: user?.language ?? 'ru', consentVersion: consent });
   if (caller.via === 'initData') await app.repo.linkStaffByPhone(phone, caller.telegramId);
   return c.json(await buildMe(app, caller), 201);
 });

@@ -178,10 +178,15 @@ export function holidaysBetween(fromMs: number, toMs: number): number[] {
 
 // ---------------------------------------------------------------- client plan
 
-export type Segment = 'loyal' | 'regular' | 'one_time' | 'sleeping' | 'lost' | 'newbie';
+export type Segment = 'vip' | 'loyal' | 'regular' | 'one_time' | 'sleeping' | 'lost' | 'newbie';
 
+/**
+ * Levels count purchase DAYS in the last 90 days (owner rules): 'vip' (every 4–9 days: event planners,
+ * offices, a husband with a weekly bouquet) reach Золотой мёд (10+), 'loyal' (every 2–4 weeks) mostly
+ * Королева улья (3+), the rest stay Пчёлка — roughly 5 % / 15 % / 80 %.
+ */
 const SEGMENTS: ReadonlyArray<readonly [Segment, number]> = [
-  ['loyal', 11], ['regular', 26], ['one_time', 26], ['sleeping', 17], ['lost', 15], ['newbie', 5],
+  ['vip', 3], ['loyal', 11], ['regular', 25], ['one_time', 27], ['sleeping', 16], ['lost', 14], ['newbie', 4],
 ];
 
 export interface PlannedPurchase {
@@ -212,7 +217,7 @@ export interface ClientPlan {
 /** Skewed bouquet price: most 100–600k, a tail of big orders up to 2.5M (сум, rounded to 5 000). */
 function bouquet(rng: () => number, segment: Segment, holiday: boolean): number {
   let x = rng() < 0.86 ? 80_000 + 520_000 * rng() ** 1.6 : 600_000 + 1_900_000 * rng() ** 2;
-  if (segment === 'loyal') x *= 1.25;
+  if (segment === 'loyal' || segment === 'vip') x *= 1.25;
   if (holiday) x *= 1.2;
   return Math.min(2_500_000, Math.max(80_000, Math.round(x / 5_000) * 5_000));
 }
@@ -235,11 +240,14 @@ export function demoPlan(i: number, anchorMs: number): ClientPlan {
     if (!days.includes(last) && days.length < maxN) days.push(last);
   };
   switch (segment) {
+    case 'vip':
+      span(between(rng, 80, 100), between(rng, 0, 4), 6, 9, 14);
+      break;
     case 'loyal':
-      span(between(rng, 150, 178), between(rng, 0, 9), 18, 34, 7);
+      span(between(rng, 110, 160), between(rng, 0, 9), 16, 30, 7);
       break;
     case 'regular':
-      span(between(rng, 70, 170), between(rng, 0, 32), 30, 65, 4);
+      span(between(rng, 70, 170), between(rng, 0, 32), 30, 65, 3);
       break;
     case 'one_time':
       days.push(between(rng, 0, 175));
@@ -258,7 +266,7 @@ export function demoPlan(i: number, anchorMs: number): ClientPlan {
   // Holiday peaks: regulars come for 1 September, Teacher's day, 8 March…
   const first = days.length ? Math.max(...days) : 0;
   const last = days.length ? Math.min(...days) : 0;
-  const pHoliday = { loyal: 0.4, regular: 0.22, sleeping: 0.18, lost: 0.12, one_time: 0, newbie: 0 }[segment];
+  const pHoliday = { vip: 0.5, loyal: 0.4, regular: 0.22, sleeping: 0.18, lost: 0.12, one_time: 0, newbie: 0 }[segment];
   const holidayDays = new Set<number>();
   for (const h of holidaysBetween(daysAgo(DEMO_WINDOW_DAYS), anchorMs - DAY / 2)) {
     const d = Math.round((anchorMs - h) / DAY) + between(rng, 0, 2);
@@ -298,7 +306,7 @@ export function demoPlan(i: number, anchorMs: number): ClientPlan {
       reversal: reason
         ? { reason, correctedFlowers: reason === 'Ошибка в сумме' ? Math.max(80_000, Math.round((flowers * (0.7 + rng() * 0.25)) / 5_000) * 5_000) : null }
         : null,
-      redeemShare: rng() < (segment === 'loyal' ? 0.45 : 0.25) ? (rng() < 0.7 ? 1 : 0.5) : 0,
+      redeemShare: rng() < (segment === 'loyal' || segment === 'vip' ? 0.45 : 0.25) ? (rng() < 0.7 ? 1 : 0.5) : 0,
       useDiscount: rng() < 0.65,
       handOutCard: rng() < 0.35,
     });

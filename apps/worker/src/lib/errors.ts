@@ -11,6 +11,8 @@ export class HttpError extends Error {
     readonly status: number,
     readonly code: ApiErrorCode,
     message: string,
+    /** Optional machine-readable extras, returned as error.details (e.g. stock_short). */
+    readonly details?: unknown,
   ) {
     super(message);
   }
@@ -41,7 +43,11 @@ const LOYALTY_MAP: Record<LoyaltyErrorCode, { status: number; code: ApiErrorCode
 
 export function toApiError(err: unknown): { status: number; body: ApiError } {
   const body = (code: ApiErrorCode, message: string): ApiError => ({ error: { code, message } });
-  if (err instanceof HttpError) return { status: err.status, body: body(err.code, err.message) };
+  if (err instanceof HttpError) {
+    const b = body(err.code, err.message);
+    if (err.details !== undefined) b.error.details = err.details;
+    return { status: err.status, body: b };
+  }
   if (err instanceof LoyaltyError) {
     if (err.code === 'REVERSAL_WINDOW_EXPIRED' || err.code === 'REVERSAL_GIFT_USED' || err.code === 'REVERSAL_POINTS_SPENT') {
       return { status: 409, body: body('conflict', reversalBlockMessage(err.code, err.data.hours)) };

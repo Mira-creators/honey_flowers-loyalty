@@ -6,6 +6,7 @@ import {
   cardPosition,
   deriveLevel,
   expiryInfo,
+  isBirthdayReward,
   isGrantedReward,
   LoyaltyError,
   purchasesToNextReward,
@@ -177,7 +178,7 @@ export class LoyaltyService {
    * never credits a bonus enabled after signup.
    * Returns the welcome bonus credited by THIS call (0 if none / already).
    */
-  async registerWithPhone(input: { telegramId: number; name: string | null; phone: string; language: string }): Promise<{
+  async registerWithPhone(input: { telegramId: number; name: string | null; phone: string; language: string; consentVersion?: string | null }): Promise<{
     client: ClientProfile;
     created: boolean;
     /** The phone matched a client imported from the shop's old base: this account took it over. */
@@ -200,6 +201,7 @@ export class LoyaltyService {
           phone: input.phone,
           language: input.language,
           consentAt: this.clock(),
+          consentVersion: input.consentVersion ?? null,
           createdAt: this.clock(),
         });
         created = true;
@@ -220,6 +222,7 @@ export class LoyaltyService {
         phone: input.phone,
         name: client.name ?? input.name,
         consentAt: client.consentAt ?? this.clock(),
+        ...(input.consentVersion ? { consentVersion: input.consentVersion } : {}),
       });
     }
     if (!completesRegistration) return { client, created, claimed: false, welcomeBonus: 0 };
@@ -229,15 +232,15 @@ export class LoyaltyService {
   }
 
   /**
-   * The phone already belongs to a client. If that client was imported from the old base
-   * and is not linked to Telegram yet, this Telegram account CLAIMS it: same client row,
+   * The phone already belongs to a client. If that client was imported from the old base, or
+   * created by staff when crediting a purchase to this phone (Л9), and is not linked to Telegram yet, this Telegram account CLAIMS it: same client row,
    * balance, history and card; registration completes now (welcome bonus once, if enabled).
    * A phone of a real Telegram account, or a caller who already has a card of their own
    * (two cards would have to be merged by hand), is refused as before.
    */
   private async claimImported(
     holder: ClientProfile,
-    input: { telegramId: number; name: string | null; language: string },
+    input: { telegramId: number; name: string | null; language: string; consentVersion?: string | null },
   ): Promise<{ client: ClientProfile; created: boolean; claimed: boolean; welcomeBonus: Uzs }> {
     const taken = () => new PhoneTakenError('этот номер уже привязан к другому аккаунту Telegram');
     // Demo clients (TEST_MODE seeding) also have negative ids: they are never handed to a real person.
@@ -249,6 +252,7 @@ export class LoyaltyService {
       name: input.name,
       language: input.language,
       consentAt: this.clock(),
+      consentVersion: input.consentVersion ?? null,
     });
     if (!client) throw taken(); // claimed by someone else a moment ago
     const res = await this.execute(client.id, ({ rules, state, now }) => registerClient(rules, state, now));
@@ -270,7 +274,7 @@ export class LoyaltyService {
     const pos = cardPosition(rules, state);
     const layout = rewardsForCycle(rules, pos.cycle);
     // Gifts granted by the owner are not tied to a cell.
-    const unlockedThisCycle = state.rewards.filter((r) => r.cycle === pos.cycle && !isGrantedReward(r));
+    const unlockedThisCycle = state.rewards.filter((r) => r.cycle === pos.cycle && !isGrantedReward(r) && !isBirthdayReward(r));
     const expiry = expiryInfo(rules, state, now);
 
     return {

@@ -5,6 +5,8 @@ import { vi } from 'vitest';
 import app from '../src/app.js';
 import { D1Repository } from '../src/db/d1Repository.js';
 import type { Env } from '../src/env.js';
+import { CONSENT_VERSION } from '../src/lib/legal.js';
+import type { LoyaltyRules } from '@honey/core';
 
 export const testEnv = env as unknown as Env;
 export const BOT_TOKEN = testEnv.BOT_TOKEN!;
@@ -130,7 +132,20 @@ export async function tmaHeader(telegramId: number, extra: Record<string, unknow
 let updateId = 1000;
 
 /** Deliver a Telegram update to the webhook. */
+/**
+ * Д1: a contact registers only after the rules + consent were accepted. Most bot tests are about
+ * other things, so webhook() accepts the texts for the contact's sender first unless switched off
+ * (the consent gate tests set botOpts.autoConsent = false).
+ */
+export const botOpts = { autoConsent: true };
+
+export async function giveConsent(telegramId: number): Promise<void> {
+  await repo().setTgConsent(telegramId, CONSENT_VERSION, new Date());
+}
+
 export async function webhook(update: Record<string, unknown>, secret: string | null = WEBHOOK_SECRET): Promise<Response> {
+  const msg = update.message as { contact?: unknown; from?: { id?: number } } | undefined;
+  if (botOpts.autoConsent && msg?.contact && msg.from?.id) await giveConsent(msg.from.id);
   const headers: Record<string, string> = { 'content-type': 'application/json' };
   if (secret !== null) headers['x-telegram-bot-api-secret-token'] = secret;
   const { ctx, flush } = execCtx();
@@ -159,6 +174,18 @@ export function contactUpdate(fromId: number, phone: string, contactUserId = fro
   return messageUpdate(fromId, { contact: { phone_number: phone, first_name: 'Амалия', user_id: contactUserId } });
 }
 
+export function callbackUpdate(fromId: number, data: string) {
+  return {
+    callback_query: {
+      id: String(++updateId),
+      from: tgFrom(fromId),
+      chat_instance: '1',
+      data,
+      message: { message_id: 5, date: 1, chat: { id: fromId, type: 'private' }, text: 'x' },
+    },
+  };
+}
+
 export function commandUpdate(fromId: number, command: string) {
   return messageUpdate(fromId, { text: command, entities: [{ type: 'bot_command', offset: 0, length: command.split(' ')[0]!.length }] });
 }
@@ -166,7 +193,7 @@ export function commandUpdate(fromId: number, command: string) {
 /** Register a client through the TEST_MODE shortcut. */
 export async function register(user: number, phone = `+99890${String(user).padStart(7, '0').slice(-7)}`, name = `Клиент ${user}`): Promise<MeDTO> {
   // Browser testers may register any phone except a staff member's; real users go through the bot.
-  const res = await call('/api/test/register', { user, body: { phone, name } });
+  const res = await call('/api/test/register', { user, body: { consent: true, phone, name } });
   if (res.status !== 201) throw new Error(`register failed: ${res.status} ${await res.text()}`);
   return json<MeDTO>(res);
 }
@@ -195,4 +222,17 @@ export async function buy(staff: number, clientId: string, amount: number, extra
 export async function moveClock(days: number) {
   const res = await call('/api/test/clock', { user: T + 1, body: { days } });
   if (res.status !== 200) throw new Error(`clock failed: ${res.status} ${await res.text()}`);
+}
+
+/**
+ * Rules version 1 of the test database. test/setup.ts seeds the pre-questionnaire placeholder rules
+ * (core RULES_V1_PLACEHOLDER) that most worker tests were written for; tests of the owner's rules
+ * call seedRules(defaultRules) after resetDb() (resetDb keeps version 1).
+ */
+export async function seedRules(rules: LoyaltyRules): Promise<void> {
+  await testEnv.DB.batch([
+    testEnv.DB.prepare('DELETE FROM rules_versions'),
+    testEnv.DB.prepare(`INSERT INTO rules_versions (id, rules, active_from, created_by, created_at) VALUES (1, ?, '1970-01-01T00:00:00.000Z', NULL, ?)`).bind(JSON.stringify({ ...rules, version: 1 }), new Date().toISOString()),
+    testEnv.DB.prepare(`INSERT INTO settings (key, value) VALUES ('rules_version', '1') ON CONFLICT(key) DO UPDATE SET value = '1'`),
+  ]);
 }

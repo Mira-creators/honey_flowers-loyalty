@@ -1,5 +1,5 @@
 import type { ClientListDTO, MeDTO, OperationDTO, OwnerClientDTO, OwnerStatsDTO, StaffClientLookupDTO, TestDemoClearDTO, TestDemoSeedDTO } from '@honey/contracts';
-import { balanceFromLedger, deriveLevel, settleExpiry } from '@honey/core';
+import { balanceFromLedger, defaultRules, deriveLevel, settleExpiry } from '@honey/core';
 import { hasEffects } from '@honey/service';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import app from '../src/app.js';
@@ -10,7 +10,7 @@ import { DEMO_CHUNKS, simulateDemoClient } from '../src/demo/seed.js';
 import type { Env } from '../src/env.js';
 import { computeClientStats } from '../src/lib/clientStats.js';
 import { countingEnv } from './d1Counter.js';
-import { buy, call, execCtx, json, makeStaff, mockTelegram, register, repo, resetDb, T, testEnv } from './helpers.js';
+import { buy, call, execCtx, json, makeStaff, mockTelegram, register, repo, resetDb, seedRules, T, testEnv } from './helpers.js';
 
 const TESTER = T + 77;
 const FLORIST = T + 1001;
@@ -19,6 +19,7 @@ const OWNER = T + 1002;
 let tg: ReturnType<typeof mockTelegram>;
 beforeEach(async () => {
   await resetDb();
+  await seedRules(defaultRules); // the demo is shown with the owner's rules (levels by purchase count)
   tg = mockTelegram();
 });
 afterEach(() => tg.restore());
@@ -63,14 +64,20 @@ describe('demo data (TEST_MODE)', () => {
     expect(Math.max(...perRequest)).toBeLessThanOrEqual(20);
     // Fits the daily free quota (100k rows written) with a wide margin. (~19.6k before the owner
     // console; its two covering indexes on purchases add ~2 index rows per purchase → ~21.2k.)
-    expect(rowsWritten).toBeLessThan(26_500); // + the daily aggregates (stats_daily, migration 0007) and their indexes
+    // + the daily aggregates (stats_daily, migration 0007) and their indexes; + the owner rules (0011):
+    // a few 'vip' clients with ~13 purchases for Золотой мёд and birthday gifts. ~30k: still 3 seeds a day.
+    console.log(`demo rows written: ${rowsWritten}`);
+    expect(rowsWritten).toBeLessThan(31_000);
 
     expect(await count('SELECT COUNT(*) AS n FROM clients WHERE demo = 1 AND telegram_id < 0')).toBe(DEMO_TOTAL);
     expect(await count('SELECT COUNT(*) AS n FROM staff WHERE demo = 1')).toBe(4);
     // A realistic mix: reversals, мёд spent, мёд burned, gifts opened and used, gifts still waiting.
     expect(await count(`SELECT COUNT(*) AS n FROM purchases WHERE status = 'reversed'`)).toBeGreaterThan(0);
     expect(await count(`SELECT COUNT(*) AS n FROM points_ledger WHERE type = 'redeem'`)).toBeGreaterThan(20);
-    expect(await count(`SELECT COUNT(*) AS n FROM points_ledger WHERE type = 'expire'`)).toBeGreaterThan(20);
+    // мёд lives 180 days (owner rules) and the demo covers ~6 months: few or no burns yet, but levels
+    // of clients who stopped buying have been reset (the separate 90-day level timer).
+    expect(await count(`SELECT COUNT(*) AS n FROM notification_keys WHERE key LIKE 'level_reset:%'`)).toBeGreaterThan(5);
+    expect(await count(`SELECT COUNT(*) AS n FROM notification_keys WHERE key LIKE 'level_warning:%'`)).toBeGreaterThan(5);
     expect(await count(`SELECT COUNT(*) AS n FROM rewards WHERE status = 'used'`)).toBeGreaterThan(10);
     expect(await count(`SELECT COUNT(*) AS n FROM rewards WHERE status = 'available'`)).toBeGreaterThan(10);
     expect(await count(`SELECT COUNT(DISTINCT staff_id) AS n FROM purchases`)).toBe(4);
@@ -113,8 +120,15 @@ describe('demo data (TEST_MODE)', () => {
         levels.set(lv, (levels.get(lv) ?? 0) + 1);
       }
     }
-    expect(levels.get('bee')).toBeGreaterThan(100);
-    expect(levels.get('honey') ?? 0).toBeGreaterThan(5);
+    // A believable spread of the three levels (by purchase days in the last 90 days, sticky).
+    console.log(`demo levels: ${JSON.stringify(Object.fromEntries(levels))}`);
+    expect(levels.get('bee')).toBeGreaterThan(110);
+    expect(levels.get('bee')).toBeGreaterThan(levels.get('queen') ?? 0);
+    expect(levels.get('queen') ?? 0).toBeGreaterThan(30);
+    expect(levels.get('gold') ?? 0).toBeGreaterThan(4);
+    expect(levels.get('gold') ?? 0).toBeLessThan(levels.get('queen') ?? 0);
+    // birthday gifts of the owner's rules appear too (once a year, valid 3 days after)
+    expect(await count(`SELECT COUNT(*) AS n FROM rewards WHERE id LIKE 'bday-%'`)).toBeGreaterThan(5);
     for (const i of [1, 37, 120, 250]) {
       const stored = (await r.loadClientState(demoClientId(i))).state;
       const again = simulateDemoClient(rules, demoPlan(i, anchor), anchor).state;
@@ -127,7 +141,7 @@ describe('demo data (TEST_MODE)', () => {
     await makeStaff(FLORIST, 'florist', 'Флорист');
     const stats = await json<OwnerStatsDTO>(call('/api/owner/stats', { user: OWNER }));
     expect(stats.clients).toBe(DEMO_TOTAL);
-    expect(stats.points.expired).toBeGreaterThan(0);
+    expect(stats.points.expired).toBeGreaterThanOrEqual(0);
     const ops = await json<OperationDTO[]>(call('/api/owner/operations?limit=50', { user: OWNER }));
     expect(ops.some((o) => ['Нигора Каримова', 'Дилноза Юсупова', 'Камила Ахмедова', 'Севара Рашидова'].includes(o.staffName ?? ''))).toBe(true);
     // Owner's client base: demo clients are listed with a realistic spread of statuses.
@@ -146,7 +160,7 @@ describe('demo data (TEST_MODE)', () => {
     expect(dist.active).toBeGreaterThan(90);
     expect(dist.lost).toBeGreaterThan(60);
     expect(dist.sleeping).toBeGreaterThan(15);
-    expect(dist.expiring).toBeGreaterThan(3);
+    expect(dist.expiring).toBeGreaterThanOrEqual(0); // мёд lives 180 days: the ~6-month demo has (almost) nobody about to burn
     const top = await json<ClientListDTO>(call('/api/owner/clients?sort=spent_desc&limit=5', { user: OWNER }));
     expect(top.items[0]!.spent).toBeGreaterThan(top.items[4]!.spent - 1);
     const card = await json<OwnerClientDTO>(call(`/api/owner/clients/${top.items[0]!.id}`, { user: OWNER }));
@@ -200,13 +214,14 @@ describe('demo data (TEST_MODE)', () => {
     expect(await snapshot()).toEqual(before);
     expect(await repo().getSetting('demo_seed_anchor')).toBeNull();
     const mine = await json<MeDTO>(call('/api/me', { user: T + 5001 }));
-    expect(mine.client!.balance).toBe(4_000);
+    expect(mine.client!.balance).toBe(15_000 + 4_000); // welcome bonus + 1 % of 400 000
     // Ledger is append-only again after the maintenance batch.
     await expect(testEnv.DB.prepare('DELETE FROM points_ledger').run()).rejects.toThrow(/append-only/);
   });
 
   it('the volume stays within the rows-written budget whatever the date (holiday peaks move with the calendar)', () => {
     // ~22 rows written per purchase incl. indexes and the client rows: <= 860 purchases keeps the seed under ~20k.
+    let max = 0;
     for (let m = 0; m < 12; m++) {
       const anchor = Date.UTC(2026, m, 15, 7);
       let n = 0;
@@ -219,8 +234,9 @@ describe('demo data (TEST_MODE)', () => {
           expect(x.flowers).toBeLessThanOrEqual(2_500_000);
         }
       }
+      max = Math.max(max, n);
       expect(n).toBeGreaterThan(650);
-      expect(n).toBeLessThanOrEqual(860);
+      expect(n).toBeLessThanOrEqual(920);
     }
   });
 

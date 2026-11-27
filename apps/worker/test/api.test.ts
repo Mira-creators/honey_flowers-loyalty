@@ -104,7 +104,7 @@ describe('client', () => {
 
   it('a phone cannot be taken by another Telegram account', async () => {
     await register(CLIENT, '+998901112233');
-    const res = await call('/api/test/register', { user: CLIENT + 1, body: { phone: '901112233', name: 'X' } });
+    const res = await call('/api/test/register', { user: CLIENT + 1, body: { consent: true, phone: '901112233', name: 'X' } });
     expect(res.status).toBe(409);
   });
 
@@ -343,7 +343,7 @@ describe('owner', () => {
     const byPhone = await json<StaffDTO>(call('/api/owner/staff', { user: OWNER, body: { phoneOrTelegramId: '+998 93 555 44 33', role: 'manager', name: 'Менеджер' } }));
     expect(byPhone).toMatchObject({ telegramId: null, role: 'manager', name: 'Менеджер' });
     const REAL = 8888;
-    const reg = await call('/api/test/register', { headers: await tmaHeader(REAL), body: { phone: '+998935554433', name: 'Менеджер' } });
+    const reg = await call('/api/test/register', { headers: await tmaHeader(REAL), body: { consent: true, phone: '+998935554433', name: 'Менеджер' } });
     expect(reg.status).toBe(201);
     expect((await json<MeDTO>(call('/api/me', { headers: await tmaHeader(REAL) }))).role).toBe('manager');
 
@@ -467,7 +467,7 @@ describe('setup and misc', () => {
     const withOwner = await json(call('/setup?key=test-setup-key&owner=%2B998901110000'));
     expect(withOwner.steps.at(-1)).toMatchObject({ step: 'addOwner', ok: true });
     const REAL = 4241;
-    expect((await call('/api/test/register', { headers: await tmaHeader(REAL), body: { phone: '+998901110000', name: 'Владелец' } })).status).toBe(201);
+    expect((await call('/api/test/register', { headers: await tmaHeader(REAL), body: { consent: true, phone: '+998901110000', name: 'Владелец' } })).status).toBe(201);
     expect((await json<MeDTO>(call('/api/me', { headers: await tmaHeader(REAL) }))).role).toBe('owner');
     const byId = await json(call('/setup?key=test-setup-key&owner=4242'));
     expect(byId.steps.at(-1)).toMatchObject({ step: 'addOwner', ok: true, detail: { telegramId: 4242 } });

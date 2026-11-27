@@ -6,7 +6,7 @@ import { defineConfig } from 'vite';
 const here = (p: string) => fileURLToPath(new URL(p, import.meta.url));
 
 export default defineConfig({
-  resolve: { alias: { '@honey/contracts': here('../../packages/contracts/src/index.ts') } },
+  resolve: { alias: { '@honey/contracts': here('../../packages/contracts/src/index.ts'), '@honey/stock': here('../../packages/stock/src/index.ts') } },
   build: {
     outDir: 'dist',
     emptyOutDir: false,

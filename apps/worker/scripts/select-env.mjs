@@ -41,9 +41,12 @@ if (process.env.TEST_USERS !== undefined) {
   const users = String(process.env.TEST_USERS).replace(/[^0-9,+\s]/g, '').replace(/\s+/g, ' ').trim();
   toml = toml.replace(/^TEST_USERS = ".*"$/m, `TEST_USERS = "${users}"`);
 }
+// «Склад» prototype: on for the dev polygon, off for the client Worker unless STOCK_ENABLED=1 is a build variable there.
+const stockOn = process.env.STOCK_ENABLED !== undefined && process.env.STOCK_ENABLED !== '' ? process.env.STOCK_ENABLED.trim() === '1' : t.kind !== 'client';
+toml = toml.replace(/^STOCK_ENABLED = ".*"$/m, `STOCK_ENABLED = "${stockOn ? '1' : '0'}"`);
 if (process.env.ALERT_DAILY) toml = toml.replace(/^ALERT_DAILY = ".*"$/m, `ALERT_DAILY = "${process.env.ALERT_DAILY === '1' ? '1' : '0'}"`);
 writeFileSync(path, toml);
 const tm = /^TEST_MODE = "(.*)"$/m.exec(toml)?.[1];
 const tu = /^TEST_USERS = "(.*)"$/m.exec(toml)?.[1] ?? '';
 const testInfo = tm === '1' ? `TEST_MODE=1, test features: ${tu ? `only TEST_USERS (${tu.split(',').filter(Boolean).length})` : t.kind === 'client' ? 'OFF (TEST_USERS empty on the client worker)' : 'everyone'}` : 'TEST_MODE=0 (production)';
-console.log(`[select-env] branch=${branch} → worker=${t.name}, database=${t.dbName}, ${testInfo}`);
+console.log(`[select-env] branch=${branch} → worker=${t.name}, database=${t.dbName}, ${testInfo}, STOCK_ENABLED=${stockOn ? '1' : '0'}`);

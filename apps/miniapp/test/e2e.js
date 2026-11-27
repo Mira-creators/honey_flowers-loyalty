@@ -43,6 +43,8 @@ function open(testUser, name) {
   };
   return api;
 }
+// Owner tab: with «Склад» on (STOCK_ENABLED) Правила / Команда / Журнал live in «Ещё».
+const ownerTab = (x, name) => { if (x.q(`[data-act="otab"][data-tab="${name}"]`)) x.act("otab", `[data-tab="${name}"]`); else { x.act("stMore"); x.act("stMoreGo", `[data-tab="${name}"]`); } };
 const curl = (user, method, p, body) => fetch(BASE + p, { method, headers: { "X-Test-User": String(user), "X-Test-Key": KEY, "X-Test-Name": "Curl", "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined }).then(async r => ({ status: r.status, body: await r.json().catch(() => null) }));
 
 (async () => {
@@ -53,16 +55,37 @@ const curl = (user, method, p, body) => fetch(BASE + p, { method, headers: { "X-
     await curl(admin, "POST", "/api/test/role", { role: "owner" });
     await curl(admin, "POST", "/api/test/clock", { reset: true });
     const rules = (await curl(admin, "GET", "/api/owner/rules")).body;
-    if (rules.levels[0].pct !== 1) { rules.levels[0].pct = 1; const r = await curl(admin, "PUT", "/api/owner/rules", rules); if (r.status !== 200) throw new Error("setup: rules reset failed " + JSON.stringify(r.body)); }
+    const pcts = [1, 3, 5];
+    if (rules.levels.some((l, i) => l.pct !== pcts[i])) { rules.levels.forEach((l, i) => { l.pct = pcts[i] ?? l.pct; }); const r = await curl(admin, "PUT", "/api/owner/rules", rules); if (r.status !== 200) throw new Error("setup: rules reset failed " + JSON.stringify(r.body)); }
     await curl(admin, "POST", "/api/test/role", { role: "client" });
   }
   // ---------- client A registers in the browser ----------
   const ca = open(A, "Дилноза");
   check("client: onboarding shown", await ca.until(() => ca.text().includes("Медовая карта Honey Flowers")), ca.text().slice(0, 80));
+  // Д1: «Как работает» bullets + the two texts + «Принимаю» before registering
+  check("consent: bullets from the rules", await ca.until(() => ca.text().includes("Как работает Медовая карта") && ca.text().includes("15 000") && ca.text().includes("180 дней")), ca.text().slice(0, 300));
+  check("consent: register disabled until «Принимаю»", ca.q('[data-act="testRegister"]')?.disabled === true, "");
+  check("brand: logo on onboarding", !!ca.q('img.logo[src="/brand/honey-logo.webp"]'), "");
+  ca.act("openLegal", '[data-page="rules"]');
+  check("consent: rules page with placeholders and the draft banner", await ca.until(() => ca.text().includes("Правила программы лояльности") && ca.text().includes("[ФИО ИП]") && ca.text().includes("Черновик")), ca.text().slice(0, 200));
+  ca.act("closeLegal"); await ca.until(() => ca.q("#consentCheck"));
+  ca.act("openLegal", '[data-page="consent"]');
+  check("consent: personal data page", await ca.until(() => ca.text().includes("Согласие на обработку персональных данных") && ca.text().includes("[ИНН]")), ca.text().slice(0, 200));
+  ca.act("closeLegal"); await ca.until(() => ca.q("#consentCheck"));
+  const cb = ca.q("#consentCheck"); cb.checked = true; cb.dispatchEvent(new ca.w.Event("change", { bubbles: true }));
+  await ca.until(() => ca.q('[data-act="testRegister"]') && !ca.q('[data-act="testRegister"]').disabled);
   ca.q("#regPhone").value = "+998 90 123 45 " + String(A).slice(-2);
   ca.act("testRegister");
   check("client: registered, home with honeycomb", await ca.until(() => ca.text().includes("Привет, Дилноза") && ca.q("#comb")), ca.text().slice(0, 140));
-  check("client: balance shown", /0/.test(ca.q("#balN")?.textContent || ""), ca.q("#balN")?.textContent);
+  check("client: welcome bonus 15 000 shown", /15\s?000/.test(ca.q("#balN")?.textContent || ""), ca.q("#balN")?.textContent);
+  check("consent: stored with the card", (await curl(A, "GET", "/api/me")).body.consent.required === false, "");
+  check("client: honey timer always shown", ca.text().includes("Мёд сгорит") || ca.text().includes("Мёд сгорает"), ca.q(".timers")?.textContent);
+  check("client: level rule shown", ca.text().includes("Уровень сохраняется"), ca.q(".timers")?.textContent);
+  check("client: count-based progress", ca.text().includes("ещё 3 покупки"), ca.q(".prog")?.textContent);
+  // Л6: optional birthday right after registration
+  check("birthday: asked on home", !!ca.q("#bdayInput"), "");
+  ca.q("#bdayInput").value = "1994-05-17"; ca.act("saveBirthday");
+  check("birthday: saved once", await ca.until(() => ca.toasts().includes("Сохранено") && !ca.q(".bday-card")), ca.toasts());
   ca.act("tab", '[data-tab="card"]'); await wait(50);
   check("client: real QR rendered", !!ca.q(".qr svg rect, .qr svg path"), "");
   const code = ca.q(".code")?.textContent.trim();
@@ -86,7 +109,7 @@ const curl = (user, method, p, body) => fetch(BASE + p, { method, headers: { "X-
   check("staff: done screen", await sb.until(() => sb.text().includes("Начислено")), sb.toasts() || sb.text().slice(0, 200));
 
   // ---------- client A sees it live (polling) ----------
-  check("client: live update balance 3 500", await ca.until(() => /3\s?500/.test(ca.q("#balN")?.textContent || ""), 10000), ca.q("#balN")?.textContent);
+  check("client: live update balance 15 000 + 3 500", await ca.until(() => /18\s?500/.test(ca.q("#balN")?.textContent || ""), 10000), ca.q("#balN")?.textContent);
 
   // two more purchases via UI → 3rd cell gift
   for (let i = 0; i < 2; i++) {
@@ -120,6 +143,8 @@ const curl = (user, method, p, body) => fetch(BASE + p, { method, headers: { "X-
   await ca.closeModals();
   ca.act("tab", '[data-tab="gifts"]'); await wait(50);
   check("client: gift listed", ca.text().includes("Открытка в подарок"), ca.text().slice(0, 160));
+  ca.act("tab", '[data-tab="home"]'); await wait(50);
+  check("level: Королева улья after 3 purchase days, kept until …", await ca.until(() => ca.text().includes("Королева улья") && ca.text().includes("Уровень сохранится до"), 8000), ca.q(".timers")?.textContent);
 
   // ---------- reversal + double reversal ----------
   sb.act("askReverse"); await wait(50);
@@ -148,18 +173,19 @@ const curl = (user, method, p, body) => fetch(BASE + p, { method, headers: { "X-
   // ---------- owner ----------
   sb.act("openTest"); await wait(30); sb.act("testRole", '[data-role="owner"]');
   check("owner: stats", await sb.until(() => sb.text().includes("участников")), sb.text().slice(0, 160));
-  sb.act("otab", '[data-tab="rules"]');
+  ownerTab(sb, "rules");
   await sb.until(() => sb.q('[data-key="lvpct"][data-i="0"]'));
-  const inp = sb.q('[data-key="lvpct"][data-i="0"]'); inp.value = "2"; inp.dispatchEvent(new sb.w.Event("change", { bubbles: true }));
+  check("owner: rules switches shown", !!sb.q("#r-levelMode") && !!sb.q("#r-staffCanReverse") && !!sb.q("#r-birthdayEnabled") && sb.text().includes("от, покупок"), "");
+  const inp = sb.q('[data-key="lvpct"][data-i="1"]'); inp.value = "4"; inp.dispatchEvent(new sb.w.Event("change", { bubbles: true }));
   await wait(30); sb.act("saveRules");
   check("owner: rules saved", await sb.until(() => sb.toasts().includes("Правила сохранены")), sb.toasts());
   await curl(B, "POST", "/api/test/clock", { days: 1 });
   const pv2 = await curl(B, "POST", "/api/staff/purchase/preview", { clientId: meR.client.id, amount: 100000, redeem: false });
-  check("owner: new pct applies to next purchase", pv2.body.pct === 2 && pv2.body.cashback === 2000, JSON.stringify(pv2.body));
-  sb.act("otab", '[data-tab="staff"]'); await sb.until(() => sb.q("#newStaff"));
+  check("owner: new pct applies to next purchase", pv2.body.pct === 4 && pv2.body.cashback === 4000, JSON.stringify(pv2.body));
+  ownerTab(sb, "staff"); await sb.until(() => sb.q("#newStaff"));
   sb.q("#newStaff").value = "+998 91 555 44 33"; sb.act("addStaff");
   check("owner: staff added", await sb.until(() => sb.toasts().includes("Сотрудник добавлен")), sb.toasts());
-  sb.act("otab", '[data-tab="ops"]');
+  ownerTab(sb, "ops");
   check("owner: ops log", await sb.until(() => sb.text().includes("Журнал операций") && sb.text().includes("отменена")), sb.text().slice(0, 200));
 
   // ---------- owner: client base («Клиенты») ----------
@@ -205,13 +231,29 @@ const curl = (user, method, p, body) => fetch(BASE + p, { method, headers: { "X-
   check("clients: «Начислить покупку» opens the cash desk with the client", await sb.until(() => sb.q(".pad") && sb.text().includes("Дилноза") && sb.q('[data-tab="desk"][aria-current="page"]')), sb.text().slice(0, 160));
   sb.act("backToFind"); await wait(30);
 
-  // ---------- expiry ----------
-  await curl(B, "POST", "/api/test/clock", { days: 80 });
+  // ---------- Л9: credit by phone for a client not in the bot ----------
+  sb.act("otab", '[data-tab="desk"]'); await sb.until(() => sb.q("#q"));
+  const newPhone = "+99893" + String(A).slice(-7);
+  sb.q("#q").value = newPhone; sb.act("search");
+  check("phone credit: offered for an unknown full number", await sb.until(() => !!sb.q('[data-act="creditPhone"]')), sb.text().slice(0, 200));
+  sb.act("creditPhone");
+  check("phone credit: card opened, marked «ещё не в боте»", await sb.until(() => sb.q(".pad") && sb.text().includes("ещё не в боте")), sb.text().slice(0, 200));
+  for (const k of ["1", "0", "0", "000"]) sb.act("key", `[data-k="${k}"]`);
+  await sb.until(() => sb.text().includes("Кешбэк"));
+  sb.act("charge");
+  check("phone credit: purchase accrued", await sb.until(() => sb.text().includes("Начислено")), sb.toasts());
+  const claimer = A + 5;
+  const reg = await curl(claimer, "POST", "/api/test/register", { consent: true, phone: newPhone, name: "Позже в боте" });
+  check("phone credit: claimed with accruals + welcome bonus", reg.status === 201 && reg.body.client.balance === 1000 + 15000, `${reg.status} ${JSON.stringify(reg.body?.client?.balance)}`);
+  sb.act("nextBuy"); await wait(30);
+
+  // ---------- expiry (мёд lives 180 days; a separate timer from the level) ----------
+  await curl(B, "POST", "/api/test/clock", { days: 170 });
   const ex1 = await curl(B, "POST", "/api/test/run-expiry");
   await curl(B, "POST", "/api/test/clock", { days: 15 });
   const ex2 = await curl(B, "POST", "/api/test/run-expiry");
   const after = (await curl(A, "GET", "/api/me")).body;
-  check("expiry: warned then burned", ex2.body.expired >= 1 && after.client.balance === 0, `${JSON.stringify(ex1.body)} ${JSON.stringify(ex2.body)} bal=${after.client.balance}`);
+  check("expiry: warned then burned", ex1.body.warned >= 1 && ex2.body.expired >= 1 && after.client.balance === 0, `${JSON.stringify(ex1.body)} ${JSON.stringify(ex2.body)} bal=${after.client.balance}`);
   check("client: expire in history", after.client.history.some(h => h.kind === "expire"), "");
   await curl(B, "POST", "/api/test/clock", { reset: true });
 

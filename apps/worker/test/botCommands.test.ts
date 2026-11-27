@@ -27,11 +27,10 @@ describe('bot polish: /help, /stats, /start menu', () => {
   it('/help explains the program from the rules in force (no owner commands for a client)', async () => {
     await webhook(commandUpdate(CLIENT_TG, '/help'));
     const text = lastText();
-    expect(text).toContain('🐝 Как работает «Медовые соты»');
-    expect(text).toContain('Пчёлка 1% → Медовая 3% → Королева улья 5%');
-    expect(text).toMatch(/покупка от 100\s000 сум/);
-    expect(text).toContain('в сотах 3, 6, 10 ждут подарки-сюрпризы');
-    expect(text).toContain('до 50% заказа');
+    expect(text).toContain('🐝 Как работает «Медовая карта»');
+    expect(text).toContain('1 % → 3 % → 5 %');
+    expect(text).toContain('подарки на сотах 3 — открытка, 6 — бесплатная доставка, 10 — скидка 10 %');
+    expect(text).toContain('до 50 % заказа');
     expect(text).toContain('90 дней');
     expect(text).toContain('/card');
     expect(text).not.toContain('/stats');
@@ -68,6 +67,7 @@ describe('bot polish: /help, /stats, /start menu', () => {
   it('/start shows the owner summary button only to the owner; the language button opens the language picker', async () => {
     await makeStaff(OWNER_TG, 'owner', 'Владелец');
     await webhook(commandUpdate(OWNER_TG, '/start'));
+    // the menu comes last, also while the texts are not accepted yet (Д1)
     const menu = tg.sent().at(-1)!.payload.reply_markup as { inline_keyboard: Array<Array<{ text: string; callback_data?: string }>> };
     expect(menu.inline_keyboard.at(-1)).toEqual([{ text: '📊 Сводка за сегодня', callback_data: 'stats' }]);
 

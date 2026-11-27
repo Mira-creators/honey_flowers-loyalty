@@ -9,7 +9,7 @@ let userSeq = 900_100_000;
 
 async function reg(name, phone) {
   const user = ++userSeq;
-  const r = await as(user).post('/api/test/register', { phone: phone ?? `+99897${String(user).slice(-7)}`, name });
+  const r = await as(user).post('/api/test/register', { consent: true, phone: phone ?? `+99897${String(user).slice(-7)}`, name });
   if (r.status !== 201) throw new Error(`register ${name}: ${r.status} ${r.text}`);
   return { user, id: r.body.client.id, code: r.body.client.code, name: r.body.client.name };
 }

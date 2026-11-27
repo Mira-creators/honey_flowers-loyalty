@@ -4,7 +4,7 @@ import { applyOutcome, emptyOutcome, mergeOutcomes, type Outcome } from '../outc
 import type { LoyaltyRules } from '../rules.js';
 import { balanceOf } from '../state.js';
 import type { ClientState, Uzs } from '../types.js';
-import { assert, findAvailableReward, redeemCap } from './common.js';
+import { assert, assertRewardValid, findAvailableReward, redeemCap } from './common.js';
 import { settleExpiry } from './expiry.js';
 
 export interface RedeemInput {
@@ -54,6 +54,7 @@ export function redeem(rules: LoyaltyRules, state: ClientState, input: RedeemInp
   const out = emptyOutcome();
 
   const reward = input.rewardId ? findAvailableReward(s, input.rewardId) : null;
+  if (reward) assertRewardValid(rules, reward, now);
   if (reward?.type === 'discount_pct' && points > 0 && !rules.allowDiscountWithPoints) {
     throw new LoyaltyError('DISCOUNT_WITH_POINTS_NOT_ALLOWED', 'discount gift and points cannot be combined');
   }

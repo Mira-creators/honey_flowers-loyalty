@@ -1,4 +1,4 @@
-import { activePurchases, availableRewards, levelTotals, monthsBeforeKey, type CardMove, type ClientState, type LedgerEntry, type PurchaseRecord, type Reward } from '@honey/core';
+import { activePurchases, availableRewards, levelHistoryFrom, levelTotals, type CardMove, type ClientState, type LedgerEntry, type PurchaseRecord, type Reward } from '@honey/core';
 import type { LoadHint, VersionedState } from '@honey/service';
 
 /**
@@ -9,13 +9,14 @@ import type { LoadHint, VersionedState } from '@honey/service';
  *   purchases   the latest few, the 2 latest active ones (expiry anchor), those of the active
  *               card-move tail (reversal cascade), the hinted ones (id, idempotency keys) and the
  *               one that unlocked the gift used in the hinted purchase; with a level window, every
- *               active purchase inside it
+ *               active purchase inside it; sticky levels: EVERY purchase (reversed too) over the
+ *               window / reset period + reversal window (core levelHistoryFrom)
  *   ledger      the latest expiry, the first credit after it, the latest welcome / positive
  *               adjustment (expiry anchor), the welcome entry, the hinted purchase's rows and rows
  *               with hinted idempotency keys
  *   card moves  the latest TAIL active moves, the latest expiry reset, the hinted purchase's moves
  *   gifts       the latest GIFTS available ones (all of them when an expiry resets the card), the latest
- *               GIFTS by unlock, the hinted ones
+ *               GIFTS by unlock, the 2 latest birthday gifts (once-a-year check), the hinted ones
  *   keys        all sent-notification keys (a few per 90 days)
  *   folded      client_stats totals (balance, purchases_count, level_sum, level_count, gifts_available) minus what
  *               was loaded — exact, because client_stats is written in the same batch as every fact.
@@ -41,17 +42,16 @@ export function boundedStatements(db: D1Database, ids: string[], hint: LoadHint 
   const keys = JSON.stringify(hint.keys ?? []);
   const rewardIds = JSON.stringify(hint.rewardIds ?? []);
   const pid = hint.purchaseId ?? null;
-  const windowFrom =
-    hint.rules?.levels.windowMonths && hint.now
-      ? new Date(`${monthsBeforeKey(hint.now, hint.rules.levels.windowMonths, hint.rules.timezone)}T00:00:00+05:00`).toISOString()
-      : null;
+  const lh = hint.rules && hint.now ? levelHistoryFrom(hint.rules, hint.now) : null;
+  const windowFrom = lh ? lh.from.toISOString() : null;
+  const windowAll = lh?.allStatuses ? 1 : 0;
   const P = 'p.*, p.rowid AS _rowid';
   const L = 'l.*, l.rowid AS _rowid';
   const R = 'r.*, r.rowid AS _rowid';
   const stmts = [
     // 0: client + stored totals
     db.prepare(
-      `SELECT c.id, c.created_at, c.level_override, c.level_override_at, c.level_override_index,
+      `SELECT c.id, c.created_at, c.birthday, c.level_override, c.level_override_at, c.level_override_index,
          s.client_id AS has_stats, s.balance, s.purchases_count, s.level_sum, s.level_count, s.gifts_available
        FROM ${J} JOIN clients c ON c.id = j.value LEFT JOIN client_stats s ON s.client_id = c.id`,
     ).bind(json),
@@ -66,8 +66,8 @@ export function boundedStatements(db: D1Database, ids: string[], hint: LoadHint 
        SELECT ${P} FROM ${J} JOIN card_moves m ON m.id IN (SELECT m2.id FROM card_moves m2 WHERE m2.client_id = j.value AND m2.reverted_at IS NULL ORDER BY m2.id DESC LIMIT ${TAIL})
          JOIN purchases p ON p.id = m.purchase_id
        UNION ALL
-       SELECT ${P} FROM ${J} JOIN purchases p ON p.status = 'active' AND p.client_id = j.value AND p.created_at >= ?2 WHERE ?2 IS NOT NULL`,
-    ).bind(json, windowFrom),
+       SELECT ${P} FROM ${J} JOIN purchases p ON (p.status = 'active' OR ?3 = 1) AND p.client_id = j.value AND p.created_at >= ?2 WHERE ?2 IS NOT NULL`,
+    ).bind(json, windowFrom, windowAll),
     // 3: purchases — hinted (id, keys) and the unlocker of the gift used in the hinted purchase
     db.prepare(
       `SELECT ${P} FROM purchases p WHERE p.id = ?2 AND p.client_id IN (SELECT value FROM json_each(?1))
@@ -105,7 +105,9 @@ export function boundedStatements(db: D1Database, ids: string[], hint: LoadHint 
     db.prepare(
       `SELECT ${R} FROM ${J} JOIN rewards r ON r.rowid IN (SELECT x.rowid FROM rewards x WHERE x.client_id = j.value AND x.status = 'available' ORDER BY x.unlocked_at DESC LIMIT ?2)
        UNION ALL
-       SELECT ${R} FROM ${J} JOIN rewards r ON r.rowid IN (SELECT x.rowid FROM rewards x WHERE x.client_id = j.value ORDER BY x.unlocked_at DESC LIMIT ${GIFTS})`,
+       SELECT ${R} FROM ${J} JOIN rewards r ON r.rowid IN (SELECT x.rowid FROM rewards x WHERE x.client_id = j.value ORDER BY x.unlocked_at DESC LIMIT ${GIFTS})
+       UNION ALL
+       SELECT ${R} FROM ${J} JOIN rewards r ON r.rowid IN (SELECT x.rowid FROM rewards x WHERE x.client_id = j.value AND x.id LIKE 'bday-%' ORDER BY x.unlocked_at DESC LIMIT 2)`,
     ).bind(json, hint.rules?.expiry.onExpiry === 'reset_all' ? -1 : GIFTS),
     // 8: gifts — hinted ids, unlocked by / used in the hinted purchase, handed out with hinted keys
     db.prepare(
@@ -147,7 +149,7 @@ export function assembleBounded(
     totals.set(id, { balance: Number(c.balance), count: Number(c.purchases_count), levelSum: Number(c.level_sum), levelCount: Number(c.level_count), gifts: Number(c.gifts_available) });
     states.set(id, {
       version: 0,
-      state: { clientId: id, registeredAt: new Date(String(c.created_at)), levelOverride: maps.override(c), purchases: [], ledger: [], cardMoves: [], rewards: [], sentNotificationKeys: [] },
+      state: { clientId: id, registeredAt: new Date(String(c.created_at)), levelOverride: maps.override(c), birthday: c.birthday === null || c.birthday === undefined ? null : String(c.birthday), purchases: [], ledger: [], cardMoves: [], rewards: [], sentNotificationKeys: [] },
     });
   }
   for (const v of versions!) {

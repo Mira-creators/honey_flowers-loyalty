@@ -23,6 +23,7 @@ import { computeClientStats, sameStats } from '../lib/clientStats.js';
 import { csvLine, csvResponse, tashkentMinute } from '../lib/csv.js';
 import { clientSummary, tashkentDayStartIso } from '../lib/dto.js';
 import { decodeHistoryCursor, encodeHistoryCursor, HISTORY_PAGE, historyActorIds, historyItems } from '../lib/history.js';
+import { applyBirthday, parseBirthdayInput } from '../lib/birthday.js';
 import { HttpError } from '../lib/errors.js';
 import { translateWarning } from '../lib/summary.js';
 
@@ -183,7 +184,8 @@ async function ownerClient(app: AppContext, rules: LoyaltyRules, client: ClientP
   const { historyRows } = await app.repo.loadStateWithHistory(client.id, { now, rules }, state, HISTORY_PAGE + 1);
   const page = historyRows.slice(0, HISTORY_PAGE);
   const names = await app.repo.actorNames(historyActorIds(page));
-  const summary = clientSummary(rules, client, state, now, historyItems(page, names));
+  const unclaimed = client.telegramId < 0 && !client.demo ? await app.repo.isUnclaimedPhoneCredit(client.id) : false;
+  const summary = clientSummary(rules, client, state, now, historyItems(page, names), { unclaimed });
   const last = page[page.length - 1];
   return {
     ...summary,
@@ -270,6 +272,23 @@ ownerClientRoutes.put('/clients/:id/note', async (c) => {
   const value = note.trim() || null;
   if (!(await app.repo.setClientNote(c.req.param('id'), value))) throw new HttpError(404, 'not_found', 'Клиент не найден');
   return c.json({ note: value } satisfies NoteDTO);
+});
+
+// ------------------------------------------------------------ birthday (Л6: only the owner changes it)
+
+ownerClientRoutes.put('/clients/:id/birthday', async (c) => {
+  const app = c.get('app');
+  const id = c.req.param('id');
+  const body = ((await c.req.json().catch(() => null)) ?? {}) as { birthday?: unknown };
+  const birthday = body.birthday === null || body.birthday === '' ? null : parseBirthdayInput(body.birthday, app.now());
+  const found = await app.repo.findClientWithNote(id);
+  if (!found) throw new HttpError(404, 'not_found', 'Клиент не найден');
+  const client = await app.repo.updateClient(id, { birthday });
+  await applyBirthday(app, id);
+  const now = app.now();
+  const { rules } = await app.repo.getActiveRules(now);
+  const { state } = await app.repo.loadClientState(id, { now, rules });
+  return c.json(await ownerClient(app, rules, client, found.note, state, now));
 });
 
 // ------------------------------------------------------------ CSV export

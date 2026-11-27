@@ -1,12 +1,13 @@
 /** Owner console: shared state, delegated actions, URL-backed filters, formatting. */
 
-export type Section = 'overview' | 'clients' | 'ops' | 'cohorts' | 'import';
+export type Section = 'overview' | 'clients' | 'ops' | 'cohorts' | 'import' | 'stock';
 export const SECTIONS: Array<[Section, string]> = [
   ['overview', 'Обзор'],
   ['clients', 'Клиенты'],
   ['ops', 'Покупки'],
   ['cohorts', 'Удержание'],
   ['import', 'Импорт базы'],
+  ['stock', 'Склад'],
 ];
 
 /** Delegated handlers: data-act="x" (click), data-change="x" (change), data-submit="x" (form submit). */

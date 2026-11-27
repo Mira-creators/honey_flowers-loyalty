@@ -18,6 +18,7 @@ import type { D1Repository } from '../db/d1Repository.js';
 import { computeClientStats } from '../lib/clientStats.js';
 import { byIds, contributionStmts, invalidateBuyersStmt } from '../lib/statsDaily.js';
 import { nextCheckOn } from '../lib/expirySchedule.js';
+import { clearStockDemo } from './stock.js';
 import {
   DAY,
   DEMO_STAFF,
@@ -78,7 +79,8 @@ export interface SimulatedClient {
 /** Replay one planned client through the engine. */
 export function simulateDemoClient(rules: LoyaltyRules, plan: ClientPlan, anchorMs: number): SimulatedClient {
   const id = demoClientId(plan.i);
-  const sim = new ClientSimulation(rules, emptyClientState(id, new Date(plan.registeredAt)));
+  // The birthday is part of the state: the nightly job unlocks the birthday gift (Л6).
+  const sim = new ClientSimulation(rules, { ...emptyClientState(id, new Date(plan.registeredAt)), birthday: demoProfile(plan.i).birthday });
   sim.run(new Date(plan.registeredAt), registerClient);
   let n = 0;
   for (const p of plan.purchases) {
@@ -225,7 +227,7 @@ function clientStatements(repo: D1Repository, rules: LoyaltyRules, i: number, id
 }
 
 /** Anchor instant of the demo timeline: stored on the first call, reused by every chunk. */
-async function demoAnchor(app: AppContext): Promise<number> {
+export async function demoAnchor(app: AppContext): Promise<number> {
   const stored = await app.repo.getSetting(ANCHOR_KEY);
   if (stored && Number.isFinite(Date.parse(stored))) return Date.parse(stored);
   await app.repo.db
@@ -282,6 +284,8 @@ const CLIENT_TABLES = ['points_ledger', 'card_moves', 'rewards', 'purchases', 'n
 /** Remove exactly the demo records: demo clients with all their facts, demo staff, the anchor. */
 export async function clearDemo(app: AppContext): Promise<TestDemoClearDTO> {
   const db = app.repo.db;
+  // «Склад» demo rows first (stock_sales reference demo clients; append-only guards need their flag).
+  await clearStockDemo(app);
   const counts = await db
     .prepare('SELECT (SELECT COUNT(*) FROM clients WHERE demo = 1) AS clients, (SELECT COUNT(*) FROM staff WHERE demo = 1) AS staff')
     .first<{ clients: number; staff: number }>();

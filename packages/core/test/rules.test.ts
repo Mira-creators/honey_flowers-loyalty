@@ -17,7 +17,7 @@ describe('rules config', () => {
 
   it('rejects non-ascending thresholds', () => {
     const bad = structuredClone(defaultRules);
-    bad.levels.tiers[2]!.threshold = 1_000_000;
+    bad.levels.tiers[2]!.threshold = 2;
     expect(loyaltyRulesSchema.safeParse(bad).success).toBe(false);
   });
 

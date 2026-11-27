@@ -25,6 +25,8 @@ export interface ClientProfile {
   birthday: string | null; // YYYY-MM-DD
   language: string;
   consentAt: Date | null;
+  /** Version of the consent texts the client accepted (Д1); null = not asked yet (older clients). */
+  consentVersion?: string | null;
   createdAt: Date;
   /** Short code shown as QR on the client card, e.g. "HF4821" (D1 only; '' in memory). */
   code: string;
@@ -54,7 +56,13 @@ export interface NewClient {
   phone: string | null;
   language: string;
   consentAt: Date | null;
+  consentVersion?: string | null;
   createdAt: Date;
+  /**
+   * Л9: staff credits a purchase to a phone that has no card yet. The client gets a placeholder
+   * telegram_id (placeholderTelegramId) and is claimable by whoever shares that phone in Telegram.
+   */
+  phoneCredit?: { staffId: string | null };
 }
 
 /**
@@ -108,7 +116,7 @@ export interface Repository {
   /** Phone search by digits; matches the national part (last 9 digits for +998). */
   searchClientsByPhone(phoneDigits: string, limit: number): Promise<ClientProfile[]>;
   createClient(input: NewClient): Promise<ClientProfile>;
-  updateClient(id: string, patch: Partial<Pick<ClientProfile, 'name' | 'phone' | 'language' | 'consentAt' | 'birthday'>>): Promise<ClientProfile>;
+  updateClient(id: string, patch: Partial<Pick<ClientProfile, 'name' | 'phone' | 'language' | 'consentAt' | 'consentVersion' | 'birthday'>>): Promise<ClientProfile>;
 
   findStaffByTelegramId(telegramId: number): Promise<StaffMember | null>;
 
@@ -140,7 +148,7 @@ export interface Repository {
   claimClient?(
     clientId: string,
     placeholderTelegramId: number,
-    patch: { telegramId: number; name: string | null; language: string; consentAt: Date },
+    patch: { telegramId: number; name: string | null; language: string; consentAt: Date; consentVersion?: string | null },
   ): Promise<ClientProfile | null>;
   /** Optional bulk load for the daily job (fewer round trips than one load per client). */
   loadAllClientStates?(): Promise<Map<string, VersionedState>>;

@@ -73,8 +73,11 @@ export class InMemoryRepository implements Repository {
 
   async createClient(input: NewClient): Promise<ClientProfile> {
     if (await this.findClientByTelegramId(input.telegramId)) throw new Error('telegram_id already registered');
-    const client: ClientProfile = { id: crypto.randomUUID(), birthday: null, code: '', ...input };
+    const { phoneCredit, ...rest } = input;
+    const client: ClientProfile = { id: crypto.randomUUID(), birthday: null, code: '', ...rest };
     this.clients.set(client.id, client);
+    // Л9: a card opened by staff for a phone is claimable like an imported one.
+    if (phoneCredit) this.imported.add(client.id);
     this.states.set(client.id, { state: emptyClientState(client.id, input.createdAt), version: 0 });
     return client;
   }
@@ -90,13 +93,14 @@ export class InMemoryRepository implements Repository {
   async claimClient(
     clientId: string,
     placeholderTelegramId: number,
-    patch: { telegramId: number; name: string | null; language: string; consentAt: Date },
+    patch: { telegramId: number; name: string | null; language: string; consentAt: Date; consentVersion?: string | null },
   ): Promise<ClientProfile | null> {
     const c = this.clients.get(clientId);
     if (!c || c.demo || !this.imported.has(clientId) || c.telegramId !== placeholderTelegramId || c.telegramId >= 0) return null;
     if (await this.findClientByTelegramId(patch.telegramId)) return null;
-    const next: ClientProfile = { ...c, telegramId: patch.telegramId, name: c.name ?? patch.name, language: patch.language, consentAt: c.consentAt ?? patch.consentAt };
+    const next: ClientProfile = { ...c, telegramId: patch.telegramId, name: c.name ?? patch.name, language: patch.language, consentAt: c.consentAt ?? patch.consentAt, consentVersion: patch.consentVersion ?? c.consentVersion ?? null };
     this.clients.set(clientId, next);
+    this.imported.delete(clientId);
     return next;
   }
 
@@ -122,7 +126,9 @@ export class InMemoryRepository implements Repository {
   async loadClientState(clientId: string): Promise<VersionedState> {
     const s = this.states.get(clientId);
     if (!s) throw new Error(`client ${clientId} not found`);
-    return structuredClone(s);
+    const out = structuredClone(s);
+    out.state.birthday = this.clients.get(clientId)?.birthday ?? null;
+    return out;
   }
 
   async saveOutcome(clientId: string, outcome: Outcome, expectedVersion: number): Promise<void> {

@@ -15,6 +15,9 @@ import { ownerGrantRoutes } from './routes/ownerGrant.js';
 import { exportByToken } from './routes/ownerClients.js';
 import { handleSetup } from './routes/setup.js';
 import { staffRoutes } from './routes/staff.js';
+import { ownerStockRoutes } from './routes/ownerStock.js';
+import { stockRoutes } from './routes/stock.js';
+import { stockEnabled } from './stock/core.js';
 import { testRoutes } from './routes/test.js';
 
 /**
@@ -100,6 +103,9 @@ api.route('/owner', ownerRoutes);
 api.route('/owner', ownerConsoleRoutes);
 api.route('/web', webRoutes);
 api.route('/owner', ownerGrantRoutes);
+// «Склад» (prototype, STOCK_ENABLED): staff routes + owner routes (the console reaches only /api/owner/*).
+api.route('/stock', stockRoutes);
+api.route('/owner/stock', ownerStockRoutes);
 // Test features only for testers (TEST_MODE + TEST_USERS, lib/testAccess.ts): for everybody else
 // /api/test/* does not exist, exactly as in production.
 api.use('/test/*', async (c, next) => {
@@ -114,6 +120,13 @@ app.all('/api/test/*', async (c, next) => {
   if (!isTestMode(c.env)) throw new HttpError(404, 'not_found', 'Не найдено');
   await next();
 });
+// «Склад» is off unless STOCK_ENABLED = "1": every stock route is 404 even before auth (like /api/test/*).
+for (const p of ['/api/stock', '/api/stock/*', '/api/owner/stock', '/api/owner/stock/*']) {
+  app.all(p, async (c, next) => {
+    if (!stockEnabled(c.env)) throw new HttpError(404, 'not_found', 'Не найдено');
+    await next();
+  });
+}
 // Owner console login: exchanges a one-time link token, so it runs before the auth middleware.
 app.post('/api/web/session', (c) => webSessionHandler(c, c.get('app')));
 // CSV export via a one-time link (?token=…) opened in a normal browser: no auth header there.

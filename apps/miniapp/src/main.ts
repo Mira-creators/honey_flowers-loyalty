@@ -1,5 +1,8 @@
 /** Entry: boot, auth, routing by role, polling for live client updates, delegated events. */
+import '@fontsource/cormorant-garamond/600.css';
+import '@fontsource/cormorant-garamond/700.css';
 import './styles.css';
+import './ui/mascot.css';
 import type { ClientSummaryDTO, MeDTO } from '@honey/contracts';
 import { S, actions, changes, inputs, app, resetStaff, type OwnerTab } from './state';
 import { applyTheme, THEMES, ACTIVE_THEME } from './config/themes';
@@ -14,10 +17,15 @@ import { ownerView, loadOwnerTab } from './screens/owner';
 import { closeClientCard } from './screens/clients';
 import { testButton } from './screens/testbar';
 import { myCardView } from './screens/myCard';
+import { legalPageView, reconsentView } from './screens/legal';
+import { floristInStock, ST, stockBack, stockBoot, stockKey, stockNav, stockView } from './screens/stock';
 
 const root = document.getElementById('app')!;
 // Older WebViews (iOS < 15.4) lack structuredClone; the rules editor uses it.
 if (typeof (globalThis as { structuredClone?: unknown }).structuredClone !== 'function') (globalThis as { structuredClone?: unknown }).structuredClone = (v: unknown) => JSON.parse(JSON.stringify(v));
+
+/* ---------- in-app legal pages opened from the bot (?page=rules|consent) ---------- */
+{ const p = new URLSearchParams(location.search).get('page'); if (p === 'rules' || p === 'consent') S.legalPage = p; }
 
 /* ---------- theme ---------- */
 try { const t = localStorage.getItem('honey.theme'); if (t && THEMES[t]) S.themeId = t; } catch { /* ignore */ }
@@ -33,6 +41,7 @@ const NAV: Record<string, Array<[OwnerTab, string, string]>> = {
   owner: [['desk', 'Касса', IC.card], ['stats', 'Статистика', IC.stats], ['clients', 'Клиенты', IC.clients], ['rules', 'Правила', IC.rules], ['staff', 'Команда', IC.people], ['ops', 'Журнал', IC.list]],
 };
 function staffNav(role: string) {
+  const sn = stockNav(role); if (sn !== null) return sn; // «Склад» on: its own tab set (screens/stock)
   const items = NAV[role]; if (!items) return '';
   return `<nav class="tabs" style="grid-template-columns:repeat(${items.length},1fr)" aria-label="Разделы">${items.map(([k, l, ic]) => `<button data-act="otab" data-tab="${k}" ${S.owner.tab === k ? 'aria-current="page"' : ''}>${ic}${l}</button>`).join('')}</nav>`;
 }
@@ -47,13 +56,17 @@ function render() {
   const prevScroll = document.getElementById('scr')?.scrollTop ?? 0;
   const prevKey = root.dataset.view;
   let html: string, key: string;
-  if (S.needsLogin) { html = loginView(); key = 'login'; }
+  if (S.legalPage) { html = legalPageView(); key = 'legal-' + S.legalPage; }
+  else if (S.needsLogin) { html = loginView(); key = 'login'; }
   else if (S.fatal || !S.me) { html = S.loading ? `<main class="scr center-all"><div class="spinner" aria-label="Загрузка"></div></main>` : errorView(); key = 'err'; }
   else {
     const role = S.me.role;
-    if (S.myCard && role !== 'client') { html = myCardView(); key = 'my-' + (S.me.registered ? S.screen : 'onb'); }
+    // Д1: a client whose stored consent is not the current version is asked (once) before anything else.
+    if ((role === 'client' || S.myCard) && S.me.registered && S.me.consent.required) { html = reconsentView(); key = 'reconsent'; }
+    else if (S.myCard && role !== 'client') { html = myCardView(); key = 'my-' + (S.me.registered ? S.screen : 'onb'); }
     else if (role === 'client') { html = clientView(); key = 'c-' + (S.me.registered ? S.screen : 'onb'); }
-    else if (role === 'florist' || role === 'manager') { html = staffView(); key = 's-' + S.staff.step; }
+    else if (role === 'florist' || role === 'manager') { const st = floristInStock(); html = (st ? stockView() : staffView()) + staffNav(role); key = st ? stockKey() : 's-' + S.staff.step; }
+    else if (S.owner.tab === 'stock' && ST.status) { html = stockView() + staffNav(role); key = 'o-' + stockKey(); }
     else { html = (S.owner.tab === 'desk' ? staffView() : ownerView()) + staffNav(role); key = 'o-' + S.owner.tab + (S.owner.tab === 'desk' ? S.staff.step : S.owner.tab === 'clients' && S.owner.cl.cardId ? '-card' : ''); }
   }
   // Keep what the user is typing: a late data arrival (recent list, owner tab) must not wipe an input.
@@ -73,9 +86,11 @@ function render() {
 app.render = render;
 
 function setBack() {
+  if (S.legalPage) return tg.backButton(() => { S.legalPage = null; render(); });
   if (!S.me) return tg.backButton(null);
   if (S.myCard && S.me.role !== 'client') return tg.backButton(() => { if (S.me?.registered && S.screen !== 'home') S.screen = 'home'; else S.myCard = false; render(); });
   if (S.me.role === 'client' && S.me.registered && S.screen !== 'home') return tg.backButton(() => { S.screen = 'home'; render(); });
+  if (S.me.role !== 'client' && stockBack()) return;
   if (S.me.role === 'owner' && S.owner.tab === 'clients' && S.owner.cl.cardId) return tg.backButton(closeClientCard);
   if (S.me.role !== 'client' && (S.me.role === 'florist' || S.me.role === 'manager' || S.owner.tab === 'desk') && S.staff.step !== 'find') return tg.backButton(() => { resetStaff(); render(); loadRecent(); });
   tg.backButton(null);
@@ -83,7 +98,8 @@ function setBack() {
 
 function loginView() {
   return `<main class="scr"><div class="onb">
-    <svg viewBox="-34 -34 68 56" width="120" aria-hidden="true"><g class="bee-idle">${THEMES[S.themeId].mascot(1.5)}</g></svg>
+    <img class="logo" src="/brand/honey-logo.webp" alt="Honey Flowers" width="168" height="168">
+    <svg viewBox="-34 -34 68 56" width="90" aria-hidden="true"><g class="bee-idle">${THEMES[S.themeId].mascot(1.2)}</g></svg>
     <h2 class="disp">Медовая карта Honey Flowers</h2>
     <p>${T(S.lang).openInTg}</p>
     <div class="form" style="width:100%;margin-top:10px">
@@ -141,6 +157,7 @@ async function refresh(animate = true) {
   if (first) S.lang = me.client?.lang ?? ((navigator.language || '').startsWith('uz') ? 'uz' : 'ru');
   else if (me.client && prev?.client && me.client.lang !== prev.client.lang) S.lang = me.client.lang;
   if (first || prev?.role !== me.role) {
+    void stockBoot(me.role);
     if (me.role === 'client') S.myCard = false;
     if (me.role === 'owner' && S.owner.tab === 'desk' && first) S.owner.tab = 'stats';
     if (me.role === 'florist' || me.role === 'manager' || (me.role === 'owner' && S.owner.tab === 'desk')) loadRecent();

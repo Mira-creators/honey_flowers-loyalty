@@ -3,6 +3,7 @@ import type { LoyaltyRules } from '../rules.js';
 import { CATEGORIES, type Category, type ClientState, type PurchaseLine, type Reward, type Uzs } from '../types.js';
 import { percentOf } from '../money.js';
 import { isUzs } from '../money.js';
+import { localDateKey } from '../time.js';
 
 export function assert(cond: unknown, code: ConstructorParameters<typeof LoyaltyError>[0], message: string): asserts cond {
   if (!cond) throw new LoyaltyError(code, message);
@@ -35,6 +36,13 @@ export function findAvailableReward(state: ClientState, rewardId: string): Rewar
   assert(reward, 'REWARD_NOT_FOUND', `reward ${rewardId} not found`);
   assert(reward.status === 'available', 'REWARD_NOT_AVAILABLE', `reward ${rewardId} is ${reward.status}`);
   return reward;
+}
+
+/** A gift with an end date (birthday gift) cannot be used after its last local day. */
+export function assertRewardValid(rules: LoyaltyRules, reward: Reward, now: Date): void {
+  if (reward.validUntil && localDateKey(now, rules.timezone) > reward.validUntil) {
+    throw new LoyaltyError('REWARD_NOT_AVAILABLE', `reward ${reward.id} was valid until ${reward.validUntil}`);
+  }
 }
 
 export interface RewardEffect {

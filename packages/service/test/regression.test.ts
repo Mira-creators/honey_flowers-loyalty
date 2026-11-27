@@ -1,9 +1,9 @@
 /** Regression tests for the service-layer audit findings (E3, E6, E14). */
 import { describe, expect, it } from 'vitest';
-import { defaultRules, parseRules, type Outcome } from '@honey/core';
+import { RULES_V1_PLACEHOLDER, parseRules, type Outcome } from '@honey/core';
 import { ConcurrencyError, InMemoryRepository, LoyaltyService, MemoryNotifier, validateInitData, buildInitData, InitDataError } from '../src/index.js';
 
-const rules = parseRules({ ...defaultRules, welcomeBonus: 10_000 });
+const rules = parseRules({ ...RULES_V1_PLACEHOLDER, welcomeBonus: 10_000 });
 
 describe('E6: daily expiry job isolates failures per client', () => {
   it('one client that keeps failing does not stop expiry for the others', async () => {
@@ -29,11 +29,11 @@ describe('E6: daily expiry job isolates failures per client', () => {
 describe('E3: welcome bonus is credited only when registration completes', () => {
   it('re-sharing the contact later does not claim a bonus enabled after signup', async () => {
     let now = new Date('2026-07-01T05:00:00Z');
-    const repo = new InMemoryRepository({ rules: defaultRules });
+    const repo = new InMemoryRepository({ rules: RULES_V1_PLACEHOLDER });
     const svc = new LoyaltyService(repo, new MemoryNotifier(), () => now, { retryDelayMs: 0 });
     const first = await svc.registerWithPhone({ telegramId: 9, name: 'Y', phone: '+998901112299', language: 'ru' });
     expect(first.welcomeBonus).toBe(0);
-    repo.addRulesVersion({ id: 2, rules: parseRules({ ...defaultRules, version: 2, welcomeBonus: 10_000 }), activeFrom: new Date('2026-10-01T00:00:00Z'), createdBy: null });
+    repo.addRulesVersion({ id: 2, rules: parseRules({ ...RULES_V1_PLACEHOLDER, version: 2, welcomeBonus: 10_000 }), activeFrom: new Date('2026-10-01T00:00:00Z'), createdBy: null });
     now = new Date('2026-11-01T05:00:00Z');
     const again = await svc.registerWithPhone({ telegramId: 9, name: 'Y', phone: '+998901112299', language: 'ru' });
     expect(again.welcomeBonus).toBe(0);
@@ -61,7 +61,7 @@ describe('E3: welcome bonus is credited only when registration completes', () =>
 
 describe('replay of a reversed purchase', () => {
   it('purchase() reports the stored status so the API can surface it', async () => {
-    const repo = new InMemoryRepository({ rules: defaultRules, staff: [{ telegramId: 100, name: 'F', role: 'florist', active: true }] });
+    const repo = new InMemoryRepository({ rules: RULES_V1_PLACEHOLDER, staff: [{ telegramId: 100, name: 'F', role: 'florist', active: true }] });
     const svc = new LoyaltyService(repo, new MemoryNotifier(), () => new Date('2026-11-01T05:00:00Z'), { retryDelayMs: 0 });
     const staff = (await repo.findStaffByTelegramId(100))!;
     const { client } = await svc.registerWithPhone({ telegramId: 7, name: 'Q', phone: '+998901112277', language: 'ru' });

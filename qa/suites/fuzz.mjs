@@ -68,6 +68,7 @@ export async function run() {
   const staff = await as(OWNER).post('/api/owner/staff', { phoneOrTelegramId: '+998 91 000 00 01', role: 'florist' });
   const staffId = staff.body.id;
   const rules = (await as(OWNER).get('/api/owner/rules')).body;
+  const legalVersion = (await as(OWNER).get('/api/legal')).body.version;
 
   const routes = enumerateRoutes();
   const key = (r) => `${r.method} ${r.path}`;
@@ -81,6 +82,10 @@ export async function run() {
     'POST /api/owner/web-link', 'POST /api/web/session', 'GET /api/web/me', 'POST /api/web/logout', 'GET /api/owner/console/overview', 'GET /api/owner/console/clients',
     'GET /api/owner/console/operations', 'GET /api/owner/console/cohorts', 'POST /api/owner/import', 'GET /api/owner/import/batches', 'POST /api/owner/import/:id/undo',
     'GET /api/owner/clients/:id/history', 'POST /api/owner/clients/:id/grant', 'POST /api/test/demo-seed', 'POST /api/test/demo-clear',
+    // owner rules (0011): consent, birthday, credit by phone
+    'GET /api/legal', 'POST /api/me/consent', 'POST /api/me/birthday', 'PUT /api/owner/clients/:id/birthday', 'POST /api/staff/client/by-phone',
+    // «Склад» demo (the stock routes themselves are fuzzed by suites/stock.mjs)
+    'POST /api/test/demo-stock',
   ];
   const found = routes.map(key);
   z.check('route enumeration found every known endpoint', expected.every((e) => found.includes(e)), expected.filter((e) => !found.includes(e)));
@@ -89,7 +94,7 @@ export async function run() {
   // who may call what + a valid body template
   const caller = (p) => (p === '/api/web/session' ? null : p.startsWith('/api/owner') || p.startsWith('/api/web') ? OWNER : p.startsWith('/api/staff') ? FLORIST : p.startsWith('/api/test') ? NOBODY : CLIENT);
   const fill = (p, id) => p.replace(':id', id);
-  const ids = { '/api/staff/purchase/:id/reverse': purchaseId, '/api/staff/gift/:id/use': giftId, '/api/owner/staff/:id': staffId, '/api/owner/clients/:id': cl.id, '/api/owner/clients/:id/adjust': cl.id, '/api/owner/clients/:id/note': cl.id, '/api/owner/clients/:id/history': cl.id, '/api/owner/clients/:id/grant': cl.id, '/api/owner/import/:id/undo': 'qa-no-such-batch' };
+  const ids = { '/api/staff/purchase/:id/reverse': purchaseId, '/api/staff/gift/:id/use': giftId, '/api/owner/staff/:id': staffId, '/api/owner/clients/:id': cl.id, '/api/owner/clients/:id/adjust': cl.id, '/api/owner/clients/:id/note': cl.id, '/api/owner/clients/:id/history': cl.id, '/api/owner/clients/:id/grant': cl.id, '/api/owner/clients/:id/birthday': cl.id, '/api/owner/import/:id/undo': 'qa-no-such-batch' };
   const templates = {
     'POST /api/me/lang': { lang: 'ru' },
     'POST /api/staff/purchase/preview': { clientId: cl.id, amount: 100_000, redeem: false, giftId: null, channel: 'store' },
@@ -103,11 +108,15 @@ export async function run() {
     'POST /api/owner/export/link': { kind: 'operations', from: '2026-01-01', to: '2026-12-31' },
     'POST /api/test/role': { role: 'client' },
     'POST /api/test/clock': { days: 0 },
-    'POST /api/test/register': { phone: '+998 90 999 88 77', name: 'Фазз' },
+    'POST /api/test/register': { consent: true, phone: '+998 90 999 88 77', name: 'Фазз' },
     'POST /api/owner/clients/:id/grant': { kind: 'honey', points: 100, reason: 'Причина', idempotencyKey: 'fuzz-grant-0001' },
     // dryRun: an accepted mutation must not create clients
     'POST /api/owner/import': { batchId: 'fuzz-import-0001', fileName: 'f.csv', dryRun: true, options: { creditBalance: true, levelFromTotal: false, cellsFromCount: false }, rows: [{ line: 2, phone: '+998905550101', name: 'Фазз', balance: 100 }], skipped: 0 },
     'POST /api/web/session': { token: 'fuzz-token-0000000000000000' },
+    'POST /api/me/consent': { version: legalVersion },
+    'POST /api/me/birthday': { birthday: '1990-05-17' },
+    'PUT /api/owner/clients/:id/birthday': { birthday: '1990-05-17' },
+    'POST /api/staff/client/by-phone': { phone: '+998 90 777 66 55' },
     'POST /api/owner/web-link': {},
   };
   const queries = {

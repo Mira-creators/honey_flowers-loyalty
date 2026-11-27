@@ -11,4 +11,13 @@ migrations_dir = "migrations"
 
 [vars]
 TEST_MODE = "1"
+STOCK_ENABLED = "1"
 BOT_USERNAME = ""
+
+# Second, empty database for the migration test (test/stockMigrations.test.ts): migrations up to 0010
+# with data, then the stock migrations on top.
+[[d1_databases]]
+binding = "DB_MIGRATE"
+database_name = "honey-migrate-test"
+database_id = "00000000-0000-0000-0000-000000000001"
+migrations_dir = "migrations"

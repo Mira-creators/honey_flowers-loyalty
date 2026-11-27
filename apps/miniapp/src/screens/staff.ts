@@ -10,6 +10,8 @@ import { openGrantSheet } from './grantSheet';
 import { myCardButton } from './myCard';
 
 const dt = (iso: string) => new Date(iso).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+/** '+998901234567' → '+998 90 123 45 67'. */
+const prettyPhone = (p: string) => p.replace(/^\+998(\d{2})(\d{3})(\d{2})(\d{2})$/, '+998 $1 $2 $3 $4');
 const roleName = () => ({ florist: 'Сотрудник', manager: 'Сотрудник', owner: 'Владелец', client: 'Клиент' }[S.me!.role]);
 
 export function staffView(): string {
@@ -21,10 +23,12 @@ export function staffView(): string {
 function findView() {
   const st = S.staff;
   const matches = st.matches.length ? `<div class="list" style="margin-top:10px">${st.matches.map(m => `<button class="it btn-it" data-act="pickClient" data-id="${esc(m.id)}"><div class="ic">${esc(m.name.slice(0, 1))}</div><div><div class="t">${esc(m.name)}</div><div class="s">${esc(m.phoneMasked)}</div></div><span class="mut">›</span></button>`).join('')}</div>` : '';
+  const offer = st.phoneCandidate ? `<div class="note-box phone-offer"><span>Клиента с номером <b>${esc(prettyPhone(st.phoneCandidate))}</b> ещё нет в программе. Можно начислить покупку на номер: мёд и соты сохранятся, а когда клиент зайдёт в бот с этим номером, карта станет его (+ приветственный бонус).</span>
+    <button class="b acc full" data-act="creditPhone">Начислить на номер ${esc(prettyPhone(st.phoneCandidate))}</button></div>` : '';
   return `<h2 class="h disp">Начислить покупку</h2>
     ${tg.canScan() ? `<button class="b acc full big" data-act="scan">${IC.scan}Сканировать QR клиента</button>` : `<div class="note-box">Сканер QR работает внутри Telegram. В браузере найдите клиента по телефону или коду карты.</div>`}
     <div class="search"><input id="q" placeholder="Телефон или код карты (HF…)" value="${esc(st.query)}" inputmode="search" autocomplete="off" enterkeyhint="search"><button class="b" data-act="search" aria-label="Найти">${IC.search}</button></div>
-    ${matches}
+    ${matches}${offer}
     ${recentBlock()}`;
 }
 
@@ -50,14 +54,14 @@ function clientView() {
   // Own card («Моя карта»): the server refuses it (self_operation) except for the owner in TEST_MODE.
   const own = S.me!.client?.id === c.id && !(S.me!.role === 'owner' && S.me!.testMode);
   return `<button class="back" data-act="backToFind">‹ Другой клиент</button>
-    <div class="cl"><div class="ava">${esc(c.name.slice(0, 1))}</div><div><b>${esc(c.name)}</b> <span class="mut">${esc(c.code)}</span><div class="mut">${esc(c.phoneMasked)}</div><div class="mut">${esc(c.level.name)} · ${c.level.pct}% · ${fmt(c.balance)} мёда · соты ${c.card.filled}/${c.card.cells}</div></div></div>
+    <div class="cl"><div class="ava">${esc((c.name || '☎').slice(0, 1))}</div><div><b>${esc(c.name || 'Без имени')}</b> <span class="mut">${esc(c.code)}</span>${c.unclaimed ? ' <span class="badge unclaimed" title="Карта открыта на номер; клиент ещё не заходил в бот">ещё не в боте</span>' : ''}<div class="mut">${esc(c.phoneMasked)}</div><div class="mut">${esc(c.level.name)} · ${c.level.pct}% · ${fmt(c.balance)} мёда · соты ${c.card.filled}/${c.card.cells}</div></div></div>
     ${own ? '<div class="note-box warn">Это ваша карта. Нельзя проводить покупку на свою карту — попросите коллегу.</div>' : ''}
     ${S.me!.role === 'owner' && !own ? '<button class="b full" data-act="openGrant" style="margin:0 0 10px">🎁 Подарок или мёд без покупки</button>' : ''}
     <div class="amount-disp" aria-live="polite">${amt ? fmt(amt) : '0'}<small>сум</small></div>
     <div class="pad">${['1', '2', '3', '4', '5', '6', '7', '8', '9', '000', '0', '⌫'].map(k => `<button data-act="key" data-k="${k}" aria-label="${k === '⌫' ? 'Стереть' : k}">${k}</button>`).join('')}</div>
     <div class="seg2" role="group" aria-label="Канал"><button data-act="channel" data-v="store" aria-pressed="${st.channel === 'store'}">В магазине</button><button data-act="channel" data-v="delivery" aria-pressed="${st.channel === 'delivery'}">Доставка</button></div>
     <button class="tog" data-act="redeem" aria-pressed="${st.redeem}" ${c.balance <= 0 ? 'disabled' : ''}><span>Оплатить мёдом${p ? ` · до ${fmt(p.maxRedeem)}` : ''}</span><span class="sw"></span></button>
-    ${gifts.length ? `<label class="fl" for="giftSel">Подарок клиента</label><select id="giftSel" data-change="gift"><option value="">Не применять</option>${gifts.map(g => `<option value="${esc(g.id)}" ${st.giftId === g.id ? 'selected' : ''}>${esc(GIFT_LABELS[g.type] ?? g.type)} ${g.source === 'grant' ? '(подарок владельца)' : `(ячейка ${g.cell})`}</option>`).join('')}</select>` : ''}
+    ${gifts.length ? `<label class="fl" for="giftSel">Подарок клиента</label><select id="giftSel" data-change="gift"><option value="">Не применять</option>${gifts.map(g => `<option value="${esc(g.id)}" ${st.giftId === g.id ? 'selected' : ''}>${esc(GIFT_LABELS[g.type] ?? g.type)} ${g.source === 'grant' ? '(подарок владельца)' : g.source === 'birthday' ? `ко дню рождения, до ${esc(g.validUntil ?? '')}` : `(ячейка ${g.cell})`}</option>`).join('')}</select>` : ''}
     <div class="calc">${amt ? (p ? `
       <span>К оплате деньгами: <b>${fmt(p.paid)} сум</b>${p.redeemed ? ` · мёдом ${fmt(p.redeemed)}` : ''}${p.discount ? ` · скидка ${fmt(p.discount)}` : ''}</span>
       <span>Кешбэк ${p.pct}%: <b>+${fmt(p.cashback)} мёда</b></span>
@@ -86,11 +90,13 @@ export async function loadRecent() {
 export async function openClient(q: string) {
   try {
     const r = await api.lookup(q);
+    S.staff.phoneCandidate = r.phoneCandidate ?? null;
     if (r.client) {
-      Object.assign(S.staff, { step: 'client', client: r.client, matches: [], amount: '', redeem: false, giftId: null, channel: 'store', preview: null, previewError: null, idem: newIdempotencyKey(), result: null });
+      Object.assign(S.staff, { step: 'client', client: r.client, matches: [], phoneCandidate: null, amount: '', redeem: false, giftId: null, channel: 'store', preview: null, previewError: null, idem: newIdempotencyKey(), result: null });
       tg.haptic('success'); app.render();
     } else if (r.matches.length) { S.staff.matches = r.matches; app.render(); }
-    else { S.staff.matches = []; app.render(); toast('Клиент не найден. Проверьте номер или попросите клиента открыть карту в боте.', 'error'); }
+    else if (r.phoneCandidate) { S.staff.matches = []; app.render(); }
+    else { S.staff.matches = []; app.render(); toast('Клиент не найден. Введите номер полностью (+998 XX XXX XX XX), чтобы начислить на номер.', 'error'); }
   } catch (e) { toast((e as ApiErr).message, 'error'); }
 }
 
@@ -117,6 +123,17 @@ actions.scan = async () => {
 };
 actions.search = () => { const q = (document.getElementById('q') as HTMLInputElement)?.value.trim() ?? ''; S.staff.query = q; if (q.length < 3) { toast('Введите хотя бы 3 символа', 'error'); return; } openClient(q); };
 actions.pickClient = el => openClient(el.dataset.id!);
+/** Л9: open a card for a phone that has none yet, then go on to the amount as usual. */
+actions.creditPhone = async () => {
+  const phone = S.staff.phoneCandidate; if (!phone || S.staff.busy) return;
+  S.staff.busy = true; app.render();
+  try {
+    const r = await api.creditPhone(phone);
+    Object.assign(S.staff, { step: 'client', client: r.client, matches: [], phoneCandidate: null, amount: '', redeem: false, giftId: null, channel: 'delivery', preview: null, previewError: null, idem: newIdempotencyKey(), result: null });
+    toast(r.created ? 'Карта открыта на номер — введите сумму' : 'Клиент с этим номером уже есть', 'ok'); tg.haptic('success');
+  } catch (e) { toast((e as ApiErr).message, 'error'); }
+  finally { S.staff.busy = false; app.render(); }
+};
 actions.reloadRecent = () => loadRecent();
 actions.backToFind = () => { resetStaff(); app.render(); loadRecent(); };
 actions.key = el => {

@@ -8,7 +8,7 @@
  * The product code is imported unchanged; the counting proxy is the same idea as
  * apps/worker/test/d1Counter.ts.
  */
-import { applyPurchase, manualAdjust, maxRedeemable, reversePurchase } from '@honey/core';
+import { applyPurchase, defaultRules, manualAdjust, maxRedeemable, reversePurchase, RULES_V1_PLACEHOLDER } from '@honey/core';
 import { LoyaltyService } from '@honey/service';
 import worker from '../apps/worker/src/index.ts';
 import { D1Repository } from '../apps/worker/src/db/d1Repository.ts';
@@ -117,6 +117,20 @@ async function qaRoute(req: Request, env: Env, ctx: ExecutionContext): Promise<R
     } catch (e) {
       return json({ error: String(e) }, 400);
     }
+  }
+  if (path === '/rules' && req.method === 'POST') {
+    // Rules version 1 of the QA database (kept by /wipe): the pre-questionnaire placeholder rules most
+    // suites were written for, or the owner's rules (suites/ownerRules.mjs).
+    const { preset } = (await req.json()) as { preset: 'placeholder' | 'owner' };
+    const rules = preset === 'owner' ? defaultRules : RULES_V1_PLACEHOLDER;
+    // Purchases reference their rules version: start from an empty database (wipe keeps version 1).
+    await new D1Repository(env.DB).wipeAll();
+    await env.DB.batch([
+      env.DB.prepare(`INSERT INTO rules_versions (id, rules, active_from, created_by, created_at) VALUES (1, ?1, '1970-01-01T00:00:00.000Z', NULL, ?2)
+                      ON CONFLICT(id) DO UPDATE SET rules = ?1`).bind(JSON.stringify({ ...rules, version: 1 }), new Date().toISOString()),
+      env.DB.prepare(`INSERT INTO settings (key, value) VALUES ('rules_version', '1') ON CONFLICT(key) DO UPDATE SET value = '1'`),
+    ]);
+    return json({ ok: true, preset });
   }
   if (path === '/wipe' && req.method === 'POST') {
     await new D1Repository(env.DB).wipeAll();

@@ -62,6 +62,11 @@ async function prep() {
   o.act("myCardOn");
   check("my card: onboarding for a staff member without a card", await o.until(() => o.text().includes("Назад к работе") && !!o.q("#regPhone")), o.text().slice(0, 160));
   o.q("#regPhone").value = "+998 93 555 " + String(OWNER).slice(-4, -2) + " " + String(OWNER).slice(-2);
+  // Д1: «Принимаю» first
+  check("my card: consent block before registering", await o.until(() => !!o.q("#consentCheck") && o.q('[data-act="testRegister"]').disabled), "");
+  { const cb = o.q("#consentCheck"); cb.checked = true; cb.dispatchEvent(new o.w.Event("change", { bubbles: true })); }
+  await o.until(() => !o.q('[data-act="testRegister"]').disabled);
+  o.q("#regPhone").value = "+998 93 555 " + String(OWNER).slice(-4, -2) + " " + String(OWNER).slice(-2);
   o.act("testRegister");
   check("my card: registered, honeycomb + QR tab", await o.until(() => o.text().includes("Привет, Хозяйка") && !!o.q("#comb")), o.text().slice(0, 160));
   o.act("tab", '[data-tab="card"]');
@@ -71,7 +76,7 @@ async function prep() {
 
   // ---------- self-operation: a florist cannot charge their own card ----------
   const phone = "+998 94 777 " + String(FLORIST).slice(-4, -2) + " " + String(FLORIST).slice(-2);
-  const reg = await curl(FLORIST, "POST", "/api/test/register", { phone, name: "Нигора" });
+  const reg = await curl(FLORIST, "POST", "/api/test/register", { consent: true, phone, name: "Нигора" });
   check("florist: registered as a client", reg.status === 201, JSON.stringify(reg.body).slice(0, 120));
   await curl(FLORIST, "POST", "/api/test/role", { role: "florist" });
   const ownId = reg.body.client.id;
@@ -110,8 +115,9 @@ async function demo() {
 
   // ---------- owner numbers ----------
   const stats = (await curl(OWNER, "GET", "/api/owner/stats")).body;
-  check("stats: >= 250 clients, purchases, revenue, мёд burned and spent",
-    stats.clients >= 250 && stats.purchases > 600 && stats.revenueWithCard > 100_000_000 && stats.points.expired > 0 && stats.points.redeemed > 0 && stats.giftsUsed > 0, JSON.stringify(stats));
+  // Owner rules: мёд lives 180 days, so the ~6-month demo has (almost) nothing burned yet.
+  check("stats: >= 250 clients, purchases, revenue, мёд spent",
+    stats.clients >= 250 && stats.purchases > 600 && stats.revenueWithCard > 100_000_000 && stats.points.expired >= 0 && stats.points.redeemed > 0 && stats.giftsUsed > 0, JSON.stringify(stats));
   console.log("  stats:", JSON.stringify({ clients: stats.clients, purchases: stats.purchases, purchases7d: stats.purchases7d, revenue: stats.revenueWithCard, repeat90d: stats.repeatRate90d, points: stats.points, giftsUnlocked: stats.giftsUnlocked, giftsUsed: stats.giftsUsed, perWeek: stats.perWeek.map(w => w.purchases) }));
   const dist = {};
   for (const st of ["active", "sleeping", "lost", "expiring"]) {
@@ -120,10 +126,19 @@ async function demo() {
     dist[st] = n;
   }
   console.log("  statuses:", JSON.stringify(dist));
-  check("client base: statuses well distributed", dist.active > 90 && dist.lost > 60 && dist.sleeping > 15 && dist.expiring > 3, JSON.stringify(dist));
+  check("client base: statuses well distributed", dist.active > 90 && dist.lost > 60 && dist.sleeping > 15 && dist.expiring >= 0, JSON.stringify(dist));
+  const lv = {};
+  for (const id of ["bee", "queen", "gold"]) {
+    let n = 0, cursor = null;
+    do { const p = (await curl(OWNER, "GET", `/api/owner/clients?level=${id}&limit=100${cursor ? "&cursor=" + encodeURIComponent(cursor) : ""}`)).body; n += p.items.length; cursor = p.nextCursor; } while (cursor);
+    lv[id] = n;
+  }
+  console.log("  levels:", JSON.stringify(lv));
+  check("client base: a believable spread of the three levels", lv.bee > lv.queen && lv.queen > lv.gold && lv.gold > 3, JSON.stringify(lv));
   const top = (await curl(OWNER, "GET", "/api/owner/clients?sort=spent_desc&limit=5")).body.items;
-  console.log("  top spenders:", top.map(r => `${r.name}: ${r.spent} сум, ${r.levelName}, ${r.purchases} покупок, мёд ${r.balance}`).join(" | "));
-  check("client base: top spender is «Королева улья» or «Медовая» with plausible sums", ["queen", "honey"].includes(top[0].levelId) && top[0].spent > 2_000_000 && top[0].spent < 40_000_000, JSON.stringify(top[0]));
+  console.log("  most purchase days (90 d):", top.map(r => `${r.name}: ${r.spent} дн., ${r.levelName}, ${r.purchases} покупок, мёд ${r.balance}`).join(" | "));
+  // levels by count: «spent» is the number of purchase days in the last 90 days
+  check("client base: the most active client is «Золотой мёд»", top[0].levelId === "gold" && top[0].spent >= 10 && top[0].spent <= 30, JSON.stringify(top[0]));
   const card = (await curl(OWNER, "GET", `/api/owner/clients/${top[0].id}`)).body;
   check("client card = list row (balance, spent, level)", card.balance === top[0].balance && card.spent === top[0].spent && card.level.id === top[0].levelId && card.history.length > 3, JSON.stringify({ card: [card.balance, card.spent, card.level.id], row: [top[0].balance, top[0].spent, top[0].levelId] }));
 

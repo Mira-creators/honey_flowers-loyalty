@@ -9,6 +9,7 @@ import { isTester, testPolicy, verifiedPhones } from '../lib/testAccess.js';
 import { DayTable, daysFromStmt } from '../lib/statsRead.js';
 import { apiBase, webAppKeyboard } from './telegramApi.js';
 import { asLang, ownerStatsText, t, type BotLang } from './texts.js';
+import { CONSENT_VERSION, LEGAL_IS_DRAFT, summaryBullets } from '../lib/legal.js';
 
 /**
  * Telegram bot (grammY) behind POST /telegram/webhook.
@@ -68,16 +69,23 @@ async function sendMenu(app: AppContext, ctx: Context, lang: BotLang, owner: boo
   await ctx.reply(card ? T.openCardHint : T.cardUnavailable, { reply_markup: { inline_keyboard: rows } as never });
 }
 
+/** Д1: bullets from the rules in force, links to the two texts (in-app pages), «✅ Принимаю». */
+async function sendConsent(app: AppContext, ctx: Context, lang: BotLang) {
+  const T = t(lang);
+  const { rules } = await app.repo.getActiveRules(app.now());
+  const origin = await app.origin();
+  const rows: Array<Array<Record<string, unknown>>> = [];
+  if (origin?.startsWith('https://')) {
+    rows.push([{ text: T.consentRulesButton, web_app: { url: `${origin}/?page=rules` } }]);
+    rows.push([{ text: T.consentDataButton, web_app: { url: `${origin}/?page=consent` } }]);
+  }
+  rows.push([{ text: T.consentAcceptButton, callback_data: `consent:${CONSENT_VERSION}` }]);
+  await ctx.reply(T.consentIntro(summaryBullets(rules, lang), LEGAL_IS_DRAFT), { reply_markup: { inline_keyboard: rows } as never });
+}
+
 async function helpText(app: AppContext, lang: BotLang, owner: boolean): Promise<string> {
   const { rules } = await app.repo.getActiveRules(app.now());
-  return t(lang).helpFull({
-    levels: rules.levels.tiers.map((x) => ({ title: x.title, pct: x.cashbackPct })),
-    minCell: rules.honeycomb.minPurchaseForCell,
-    giftCells: [...new Set(rules.honeycomb.rewards.map((r) => r.cell))].sort((a, b) => a - b),
-    maxRedeemPct: rules.maxRedeemPct,
-    expiryDays: rules.expiry.expiryDays,
-    owner,
-  });
+  return t(lang).helpFull({ bullets: summaryBullets(rules, lang), owner });
 }
 
 /** Owner summary for today and the current week (Monday..now), Tashkent calendar, test clock aware. */
@@ -144,10 +152,40 @@ export function createBot(app: AppContext, botInfo: UserFromGetMe): Bot {
       await sendMenu(app, ctx, lang, owner);
       return;
     }
+    // Д1: «Как работает Медовая карта» + the texts + «Принимаю» BEFORE «Поделиться номером».
+    if (!ctx.from || (await app.repo.getTgConsent(ctx.from.id))?.version !== CONSENT_VERSION) {
+      await ctx.reply(T.greeting(name), { reply_markup: { remove_keyboard: true } });
+      await sendConsent(app, ctx, lang);
+      await sendMenu(app, ctx, lang, owner);
+      return;
+    }
     await ctx.reply(`${T.greeting(name)}\n\n${T.askContact}`, {
       reply_markup: new Keyboard().requestContact(T.contactButton).resized().oneTime(),
     });
     await sendMenu(app, ctx, lang, owner);
+  });
+
+  pm.callbackQuery(/^consent:(.+)$/, async (ctx) => {
+    const lang = await langOf(app, ctx);
+    const T = t(lang);
+    await ctx.answerCallbackQuery();
+    if (ctx.match[1] !== CONSENT_VERSION) {
+      // The texts changed since this message: show the current ones.
+      await sendConsent(app, ctx, lang);
+      return;
+    }
+    await app.repo.setTgConsent(ctx.from.id, CONSENT_VERSION, app.now());
+    try {
+      await ctx.editMessageReplyMarkup({ reply_markup: undefined });
+    } catch {
+      // the message may be too old to edit
+    }
+    const client = await app.repo.findClientByTelegramId(ctx.from.id);
+    if (client?.phone) {
+      await sendCardButton(app, ctx, lang);
+      return;
+    }
+    await ctx.reply(T.consentAccepted, { reply_markup: new Keyboard().requestContact(T.contactButton).resized().oneTime() });
   });
 
   pm.command('help', async (ctx) => {
@@ -225,7 +263,14 @@ export function createBot(app: AppContext, botInfo: UserFromGetMe): Bot {
     const name = [contact.first_name, contact.last_name].filter(Boolean).join(' ') || ctx.from.first_name || null;
     try {
       const existing = await app.repo.findClientByTelegramId(ctx.from.id);
-      const res = await app.service.registerWithPhone({ telegramId: ctx.from.id, name, phone, language: lang });
+      // Д1: no card (new or claimed) without the accepted rules + consent.
+      const consent = await app.repo.getTgConsent(ctx.from.id);
+      if (!existing?.phone && consent?.version !== CONSENT_VERSION) {
+        await ctx.reply(T.consentNeeded, { reply_markup: { remove_keyboard: true } });
+        await sendConsent(app, ctx, lang);
+        return;
+      }
+      const res = await app.service.registerWithPhone({ telegramId: ctx.from.id, name, phone, language: lang, consentVersion: consent?.version ?? null });
       await app.repo.linkStaffByPhone(phone, ctx.from.id);
       const text = res.claimed
         ? T.claimed(res.welcomeBonus, res.client.code)

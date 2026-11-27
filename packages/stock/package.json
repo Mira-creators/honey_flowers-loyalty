@@ -1,0 +1,19 @@
+{
+  "name": "@honey/stock",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pure math of the stock module (no IO): FIFO lot picking, receipt allocation (currency, total mode, landed costs), bouquet costing and price suggestion, freshness, permissions",
+  "type": "module",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "files": ["src"],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  }
+}

@@ -34,6 +34,44 @@ export function levelOf(tiers, metric, override = null, overrideIndex = null) {
   return { idx, tier: tiers[idx] };
 }
 
+const DAY_MS = 86_400_000;
+const tDay = (iso) => Math.floor((Date.parse(iso) + 5 * 3_600_000) / DAY_MS); // Tashkent calendar day number
+
+/**
+ * Independent model of the level with a DAY window (owner rules, Л1/Л2), evaluated at instant `at`:
+ * the metric counts active purchases in the last `windowDays` local days (distinct days with
+ * oncePerDay); 'sticky' replays the purchases — the level rises at a purchase, drops to the first
+ * tier after `resetAfterDays` days without one — and resets at `at` after such a pause.
+ */
+export function windowLevelAt(rules, active, client, at) {
+  const lv = rules.levels;
+  const tiers = lv.tiers;
+  const since = client.level_override_at ?? null;
+  const counted = active.filter((p) => (!since || p.created_at >= since) && p.created_at <= at).sort((a, b) => (a.created_at < b.created_at ? -1 : 1));
+  const metric = (t) => {
+    const d = tDay(t);
+    const inWin = counted.filter((p) => p.created_at <= t && tDay(p.created_at) > d - lv.windowDays);
+    if (lv.criterion === 'sum') return inWin.reduce((s, p) => s + Number(p.amount), 0);
+    return lv.oncePerDay ? new Set(inWin.map((p) => tDay(p.created_at))).size : inWin.length;
+  };
+  const tierFor = (m) => tiers.reduce((idx, x, i) => (m >= x.threshold ? i : idx), 0);
+  const m = metric(at);
+  if (lv.mode !== 'sticky') return { spent: m, levelId: levelOf(tiers, m, client.level_override, client.level_override_index).tier.id };
+  let idx = 0;
+  let anchor = null;
+  if (since) {
+    idx = Math.max(0, levelOf(tiers, -1, client.level_override, client.level_override_index).idx);
+    anchor = since;
+  }
+  for (const p of counted) {
+    if (anchor && tDay(p.created_at) - tDay(anchor) >= lv.resetAfterDays) idx = 0;
+    idx = Math.max(idx, tierFor(metric(p.created_at)));
+    anchor = p.created_at;
+  }
+  if (anchor && tDay(at) - tDay(anchor) >= lv.resetAfterDays) idx = 0;
+  return { spent: m, levelId: tiers[idx].id };
+}
+
 /**
  * Check every invariant. Returns a list of violations { client, what, detail }.
  * opts.clients: restrict per-client checks to these ids (whole-table checks always run).
@@ -206,6 +244,14 @@ export async function checkInvariants(opts = {}) {
       level_sum: counted.reduce((s, p) => s + Number(p.amount), 0),
       level_count: counted.length,
     };
+    // Day-window / sticky levels depend on WHEN the summary was written: recompute at client_stats.updated_at.
+    const lv = rules.levels;
+    let skipLevel = false;
+    if (lv.windowDays) {
+      const w = windowLevelAt(rules, active, c, String(st.updated_at));
+      expect.spent = w.spent;
+      expect.level_id = w.levelId;
+    } else if (lv.windowMonths) skipLevel = true;
     // Daily-job schedule (R3): a positive balance always has a check date no later than its burn day.
     if (balance > 0 && rules.expiry.expiryDays > 0) {
       const burn = addDays(tashkentDay(anchor), rules.expiry.expiryDays);
@@ -214,7 +260,7 @@ export async function checkInvariants(opts = {}) {
     }
     const future = active.some((p) => p.created_at > nowIso);
     for (const [k, want] of Object.entries(expect)) {
-      if (future && (k === 'spent' || k === 'level_id')) continue;
+      if ((future || skipLevel) && (k === 'spent' || k === 'level_id')) continue;
       const got = typeof want === 'number' ? Number(st[k]) : String(st[k] ?? '');
       if (got !== want) bad(c.id, 'stats', `client_stats.${k} = ${JSON.stringify(got)}, recomputed ${JSON.stringify(want)}`);
     }

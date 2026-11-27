@@ -29,7 +29,8 @@ export const beeAt = (filled: number): [number, number] => filled <= 0 ? START :
 
 /** `filledShown` lets the caller draw the pre-purchase state while the bee is still flying. */
 export function combSVG(th: Theme, card: CardDTO, filledShown: number, justFilled?: number) {
-  let defs = '', g = '';
+  // Soft watercolor-like honey: a vertical gradient from the theme's light amber to its honey colour.
+  let defs = `<linearGradient id="hgrad" x1="0" y1="0" x2=".35" y2="1"><stop offset="0" style="stop-color:var(--c-comb-hi)"/><stop offset=".55" style="stop-color:var(--c-comb)"/><stop offset="1" style="stop-color:var(--c-comb);stop-opacity:.85"/></linearGradient>`, g = '';
   const n = Math.min(card.cells, 10);
   for (let i = 1; i <= n; i++) {
     const [cx, cy] = POS[i];

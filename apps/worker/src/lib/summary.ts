@@ -5,6 +5,7 @@ import type { AppContext } from '../context.js';
 import { clientSummary, publicRules } from './dto.js';
 import { historyActorIds, historyItems } from './history.js';
 import { HttpError, reversalBlockMessage } from './errors.js';
+import { CONSENT_VERSION } from './legal.js';
 
 /**
  * Summary of a client as of `now`: the BOUNDED state (unless given) and the last 50 history items
@@ -21,7 +22,9 @@ export async function summaryFor(
   if (!client) throw new HttpError(404, 'not_found', 'Клиент не найден');
   const { state: s, historyRows } = await app.repo.loadStateWithHistory(clientId, { now, rules }, state);
   const names = await app.repo.actorNames(historyActorIds(historyRows));
-  return clientSummary(rules, client, s, now, historyItems(historyRows, names));
+  // Л9: a card staff opened for a phone (placeholder Telegram id) that nobody has claimed yet.
+  const unclaimed = client.telegramId < 0 && !client.demo ? await app.repo.isUnclaimedPhoneCredit(client.id) : false;
+  return clientSummary(rules, client, s, now, historyItems(historyRows, names), { unclaimed });
 }
 
 export async function buildMe(app: AppContext, caller: Caller): Promise<MeDTO> {
@@ -30,6 +33,10 @@ export async function buildMe(app: AppContext, caller: Caller): Promise<MeDTO> {
   const client = await app.repo.findClientByTelegramId(caller.telegramId);
   const summary = client ? await summaryFor(app, rules, client.id, now) : null;
   const botUsername = app.env.BOT_USERNAME?.trim().replace(/^@/, '') || (await app.repo.getSetting('bot_username')) || null;
+  // Д1: a client is asked (again) when the stored version is not the current one; before
+  // registration the consent given in the onboarding is kept for the Telegram user.
+  const given = client ? (client.consentVersion ? { version: client.consentVersion, at: client.consentAt } : null) : await app.repo.getTgConsent(caller.telegramId);
+  const accepted = given?.version === CONSENT_VERSION;
   return {
     telegramId: caller.telegramId,
     firstName: caller.firstName,
@@ -42,10 +49,11 @@ export async function buildMe(app: AppContext, caller: Caller): Promise<MeDTO> {
     now: now.toISOString(),
     clockOffsetDays: app.clockOffsetDays,
     botUsername,
+    consent: { required: !accepted, version: CONSENT_VERSION, acceptedAt: accepted && given?.at ? given.at.toISOString() : null },
   };
 }
 
-export async function operationsFor(app: AppContext, limit: number): Promise<OperationDTO[]> {
+export async function operationsFor(app: AppContext, limit: number, role: string = 'owner'): Promise<OperationDTO[]> {
   const now = app.now();
   const { rules } = await app.repo.getActiveRules(now);
   const rows = await app.repo.operations(limit);
@@ -68,7 +76,8 @@ export async function operationsFor(app: AppContext, limit: number): Promise<Ope
     if (op.kind === 'purchase' && op.status === 'active') {
       const hours = rules.reversalWindowHours;
       const block =
-        now.getTime() - Date.parse(op.at) > hours * 3_600_000 ? reversalBlockMessage('REVERSAL_WINDOW_EXPIRED', hours)
+        !rules.staffCanReverse && role !== 'owner' ? 'Отменять покупки может только владелец — так настроено в правилах'
+        : now.getTime() - Date.parse(op.at) > hours * 3_600_000 ? reversalBlockMessage('REVERSAL_WINDOW_EXPIRED', hours)
         : Number(r.rev_gift_used ?? 0) === 1 ? reversalBlockMessage('REVERSAL_GIFT_USED')
         : Number(r.rev_balance ?? 0) < 0 ? reversalBlockMessage('REVERSAL_POINTS_SPENT')
         : null;

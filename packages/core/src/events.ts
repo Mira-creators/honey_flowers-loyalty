@@ -29,7 +29,12 @@ export type LoyaltyEvent =
     }
   | { type: 'reward_used'; clientId: string; rewardId: string; purchaseId: string | null }
   | { type: 'level_up'; clientId: string; from: string; to: string; cashbackPct: number }
-  | { type: 'level_down'; clientId: string; from: string; to: string; reason: 'expiry' | 'reversal' }
+  /** 'inactivity': a sticky level reset after levels.resetAfterDays without purchases. */
+  | { type: 'level_down'; clientId: string; from: string; to: string; reason: 'expiry' | 'reversal' | 'inactivity' }
+  /** Sticky level: it resets on `resetsOn` (local date) unless the client buys before. */
+  | { type: 'level_reset_warning'; clientId: string; levelId: string; daysLeft: number; resetsOn: string }
+  /** Birthday gift unlocked (commands/birthday.ts); valid through `validUntil` (local date, inclusive). */
+  | { type: 'birthday_gift'; clientId: string; rewardId: string; rewardType: RewardType; title: string; validUntil: string }
   | { type: 'expiry_warning'; clientId: string; daysLeft: number; balance: Uzs; expiresOn: string }
   | { type: 'points_expired'; clientId: string; amount: Uzs }
   | { type: 'card_reset'; clientId: string }

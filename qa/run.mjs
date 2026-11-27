@@ -2,19 +2,19 @@
 // QA suite entry: `npm run qa` (all areas) or `npm run qa -- --only=scenarios,fuzz`.
 // Starts its own Worker on :8797 (QA_PORT) with a FRESH local D1 in qa/.run/, unless BASE points
 // to an already running QA worker. Options:
-//   --only=a,b       areas: scenarios, clients, console, concurrency, fuzz, model, security, scale, miniapp
+//   --only=a,b       areas: scenarios, owner, clients, console, concurrency, fuzz, model, security, scale, miniapp, stock
 //   --seed=N         seed of the randomized model test (default: random, printed)
 //   --ops=N --clients=N   size of the model test (default 3000 / 200)
 //   --scale-clients=N --scale-ops=N   size of the scale test (default 2000 / 20000)
 //   --keep           keep qa/.run/d1-* after the run
 import fs from 'node:fs';
 import path from 'node:path';
-import { ctx, infraErrors, serverErrors, shapeErrors } from './lib/api.mjs';
+import { ctx, infraErrors, serverErrors, shapeErrors, useRules } from './lib/api.mjs';
 import { area, printSummary, note } from './lib/report.mjs';
 import { RUN_DIR, restartWorker, startWorker, stopFakeTelegram, stopWorker, worker } from './lib/worker.mjs';
 
 const args = Object.fromEntries(process.argv.slice(2).map((a) => { const [k, v] = a.replace(/^--/, '').split('='); return [k, v ?? true]; }));
-const ALL = ['scenarios', 'clients', 'console', 'concurrency', 'fuzz', 'model', 'security', 'scale', 'miniapp'];
+const ALL = ['scenarios', 'owner', 'clients', 'console', 'concurrency', 'fuzz', 'model', 'security', 'scale', 'miniapp', 'stock'];
 const only = args.only ? String(args.only).split(',') : ALL;
 const extra = {};
 
@@ -34,7 +34,7 @@ async function section(name, fn) {
 
 const t0 = Date.now();
 try {
-  if (only.includes('miniapp')) {
+  if (only.includes('miniapp') || only.includes('stock')) {
     // Build BEFORE wrangler starts: wrangler dev reloads when the assets directory changes.
     const { spawnSync } = await import('node:child_process');
     const b = spawnSync('npm', ['run', 'build', '-w', 'apps/miniapp'], { cwd: path.join(RUN_DIR, '..', '..'), encoding: 'utf8' });
@@ -42,7 +42,11 @@ try {
   }
   ctx.base = await startWorker({ fresh: true });
   console.log(`QA worker: ${ctx.base} (D1: ${worker.persist ?? 'external'})`);
+  // The suites below were written for the pre-questionnaire placeholder rules (exact numbers);
+  // the owner's rules have their own suite. The mini app e2e runs on the owner's rules.
+  await useRules('placeholder');
   await section('scenarios', async () => (await import('./suites/scenarios.mjs')).run());
+  await section('owner', async () => (await import('./suites/ownerRules.mjs')).run());
   await section('clients', async () => (await import('./suites/clientsList.mjs')).run());
   await section('console', async () => (await import('./suites/console.mjs')).run());
   await section('concurrency', async () => (await import('./suites/concurrency.mjs')).run());
@@ -50,7 +54,10 @@ try {
   await section('model', async () => (await import('./suites/model.mjs')).run({ seed: args.seed ? Number(args.seed) : undefined, ops: Number(args.ops || 3000), clients: Number(args.clients || 200) }));
   await section('security', async () => (await import('./suites/security.mjs')).run());
   await section('scale', async () => (await import('./suites/scale.mjs')).run({ clients: Number(args['scale-clients'] || 2000), ops: Number(args['scale-ops'] || 20000) }));
+  if (only.includes('miniapp')) await useRules('owner');
   await section('miniapp', async () => (await import('./suites/miniapp.mjs')).run());
+  // «Склад» (STOCK_ENABLED): model run with invariants, concurrency, fuzz, roles + flag, Mini App smoke
+  await section('stock', async () => (await import('./suites/stock.mjs')).run({ seed: args.seed ? Number(args.seed) : undefined, ops: Number(args['stock-ops'] || 400) }));
 } finally {
   const g = area('global: no 5xx / error contract');
   g.check('no 5xx responses in the whole run', serverErrors.length === 0, serverErrors.slice(0, 10));

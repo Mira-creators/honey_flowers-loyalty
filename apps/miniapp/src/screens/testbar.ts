@@ -7,6 +7,7 @@ import { tg } from '../tg';
 import { esc, toast, sheet, closeLayer, fmt } from '../ui/dom';
 import { loadOwnerTab } from './owner';
 import { loadRecent } from './staff';
+import { ST } from './stock';
 
 export const testButton = () => S.me?.testMode ? `<button class="test-fab" data-act="openTest" aria-label="Панель тестирования">🧪 Тест</button>` : '';
 
@@ -99,8 +100,17 @@ actions.demoSeed = async () => {
       done = r.done; total = r.total; chunk = r.nextChunk;
       demoProgress(done, total);
     }
+    // «Склад» (when on): 30 days of receipts, bouquets, sales, write-offs — after the clients (sales link to their purchases).
+    if (ST.status) {
+      for (let c: number | null = 0; c !== null;) {
+        demoProgress(c, 6, 'Склад…');
+        let r;
+        try { r = await api.test.demoStock(c); } catch { r = await api.test.demoStock(c); }
+        c = r.nextChunk;
+      }
+    }
     tg.haptic('success');
-    toast(`Готово: ${done} демо-клиентов с историей за полгода`, 'ok');
+    toast(`Готово: ${done} демо-клиентов с историей за полгода${ST.status ? ' и склад за 30 дней' : ''}`, 'ok');
     demoBusy = false; closeLayer(); await afterDemoChange();
   } catch (e) { toast((e as ApiErr).message, 'error'); }
   finally { demoBusy = false; demoText = ''; if (document.getElementById('demoProg')) openTestPanel(); }

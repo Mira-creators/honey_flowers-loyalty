@@ -78,7 +78,7 @@ describe('W1: X-Test-User cannot impersonate real Telegram users', () => {
 
   it('a tester cannot take a staff member phone, and never binds a staff row', async () => {
     await call('/setup?key=test-setup-key&owner=%2B998901110000');
-    const res = await call('/api/test/register', { user: STRANGER, body: { phone: '+998901110000', name: 'Stranger' } });
+    const res = await call('/api/test/register', { user: STRANGER, body: { consent: true, phone: '+998901110000', name: 'Stranger' } });
     expect(res.status).toBe(403);
     expect(await repo().findStaffByTelegramId(STRANGER)).toBeNull();
     // The real owner can still register that phone through the bot and becomes owner.
@@ -275,7 +275,7 @@ describe('role matrix with TEST_MODE=0', () => {
       ['POST', '/api/test/clock', { days: 1 }],
       ['POST', '/api/test/run-expiry', {}],
       ['POST', '/api/test/reset-me', {}],
-      ['POST', '/api/test/register', { phone: '+998901234567', name: 'x' }],
+      ['POST', '/api/test/register', { consent: true, phone: '+998901234567', name: 'x' }],
     ];
     for (const [method, path, body] of routes) {
       const r = await callEnv(env, path, { headers: h, method, body });

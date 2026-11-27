@@ -3,7 +3,12 @@
  * Новый бренд = новая запись в THEMES (или правка существующей): палитра светлая и тёмная,
  * шрифты, скругления, форма ячейки, маскот (пчёлка), цветок в ячейке.
  * Активная тема — ACTIVE_THEME. Логика и экраны тему не знают, только CSS-переменные.
+ * Шрифты подключены локально (@fontsource, без запросов к внешним серверам): Cormorant Garamond.
+ * Шрифты старых тем (Unbounded, Golos, Manrope, Comfortaa, Nunito) больше не грузятся из Google —
+ * у них работает запасной системный шрифт; чтобы вернуть, добавьте пакет @fontsource/<шрифт> в main.ts.
+ * Маскот — шмель из ui/mascot.ts (рисунки подменяются файлами, см. src/assets/mascot/README.md).
  */
+import { mascotG } from '../ui/mascot';
 
 export type CellShape = 'hex' | 'circle' | 'softhex';
 
@@ -20,14 +25,48 @@ export interface Theme {
   mascot: (scale?: number) => string;
 }
 
-const BEE = (s = 1) => `<g transform="scale(${s})">
-  <ellipse class="wing" cx="-4" cy="-13" rx="8" ry="6"/><ellipse class="wing b" cx="6" cy="-13" rx="7" ry="5.5"/>
-  <ellipse class="bee-body" cx="0" cy="0" rx="14" ry="9.5"/>
-  <path class="bee-stripe" d="M-5 -8.5Q-7 0 -5 8.5"/><path class="bee-stripe" d="M3 -8.8Q1 0 3 8.8"/>
-  <circle class="bee-head" cx="16" cy="-1" r="6.5"/><circle class="bee-eye" cx="18" cy="-2.6" r="1.5"/>
-  <path d="M-14 0h-5" stroke="var(--c-bee-stripe)" stroke-width="1.6" stroke-linecap="round"/></g>`;
+/** The mascot (a bumblebee placeholder until Мираслава's art; swappable by files, see ui/mascot.ts). */
+const BEE = (s = 1) => mascotG('flying', s);
+
+/** Clover head from the logo: a pink ball of florets over a green trefoil (~30 px). */
+function cloverBloom(cx: number, cy: number): string {
+  let leaves = '';
+  for (const a of [210, 330, 90]) {
+    const r = (a * Math.PI) / 180;
+    leaves += `<circle cx="${(cx + 7.5 * Math.cos(r)).toFixed(1)}" cy="${(cy + 3 + 7.5 * Math.sin(r)).toFixed(1)}" r="6" fill="var(--c-leaf)" opacity=".9"/>`;
+  }
+  let head = `<circle cx="${cx}" cy="${cy - 2}" r="9.5" fill="var(--c-petal)"/>`;
+  const pts: Array<[number, number]> = [[0, -9], [-5, -7], [5, -7], [-7.5, -2], [0, -3.5], [7.5, -2], [-4.5, 2.5], [4.5, 2.5], [0, 5.5]];
+  for (const [dx, dy] of pts) head += `<ellipse cx="${cx + dx}" cy="${cy - 2 + dy}" rx="2.2" ry="3.2" fill="var(--c-petal-deep)" opacity=".75" transform="rotate(${dx * 4} ${cx + dx} ${cy - 2 + dy})"/>`;
+  return leaves + head + `<path d="M${cx - 3} ${cy - 5}q3-2 6 0" stroke="#fff" stroke-width="1" fill="none" opacity=".7"/>`;
+}
 
 export const THEMES: Record<string, Theme> = {
+  /**
+   * «Клевер» — from the Honey Flowers logo (docs/brand/honey-logo.jpg): white / cream paper, clover
+   * greens, clover pink, the amber of the HONEY lettering (#F89C00 sampled) for мёд and the main
+   * buttons, dark text. Headings: Cormorant Garamond (bundled, @fontsource), like the logo's serif.
+   */
+  clover: {
+    name: 'Клевер',
+    fonts: { display: '"Cormorant Garamond", Georgia, "Times New Roman", serif', body: 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif', weight: 700, spacing: '0.005em' },
+    radius: { card: '20px', btn: '14px' },
+    cell: 'hex',
+    light: { bg: '#FFFEFA', surface: '#FFFFFF', surface2: '#F7F5EC', ink: '#1F261B', muted: '#68705F', line: '#E4E7D8',
+      accent: '#F49A00', 'accent-deep': '#A85F00', 'on-accent': '#241500', comb: '#F7BE4F', 'comb-hi': '#FFE3A1', cell: '#FFFFFF', 'cell-line': '#CFDDC2',
+      petal: '#F4B3C2', 'petal-deep': '#D24D6E', good: '#3E7A3A', bad: '#B8402F', notif: '#1F261B', 'notif-ink': '#FFFCF2',
+      'bee-body': '#F6B400', 'bee-line': '#1C1C17', 'bee-stripe': '#1C1C17', wing: '#FFFFFF', leaf: '#6A9A52', 'leaf-deep': '#3E7A3A',
+      wash: 'radial-gradient(110% 55% at 0% 0%, rgba(106,154,82,.08), transparent 62%), radial-gradient(90% 45% at 100% 100%, rgba(210,77,110,.06), transparent 60%)',
+      'comb-wash': 'radial-gradient(80% 70% at 30% 20%, rgba(247,190,79,.16), transparent 70%), radial-gradient(70% 60% at 85% 90%, rgba(106,154,82,.10), transparent 70%)' },
+    dark: { bg: '#131911', surface: '#1B2318', surface2: '#232E20', ink: '#F3F1E6', muted: '#ADB5A1', line: '#33402E',
+      accent: '#F7A928', 'accent-deep': '#FFC566', 'on-accent': '#1C1200', comb: '#A86C0A', 'comb-hi': '#D9952A', cell: '#1B2318', 'cell-line': '#3B4A34',
+      petal: '#E58BA1', 'petal-deep': '#F3A6B9', good: '#8DC17F', bad: '#F08A76', notif: '#F3F1E6', 'notif-ink': '#131911',
+      'bee-body': '#F6B400', 'bee-line': '#0D110C', 'bee-stripe': '#0D110C', wing: '#E9F0E2', leaf: '#7FB069', 'leaf-deep': '#9FCC89',
+      wash: 'radial-gradient(110% 55% at 0% 0%, rgba(127,176,105,.08), transparent 62%), radial-gradient(90% 45% at 100% 100%, rgba(229,139,161,.06), transparent 60%)',
+      'comb-wash': 'radial-gradient(80% 70% at 30% 20%, rgba(247,169,40,.10), transparent 70%)' },
+    bloom: cloverBloom,
+    mascot: BEE,
+  },
   honey: {
     name: 'Медовый',
     fonts: { display: '"Unbounded", "Arial Black", sans-serif', body: '"Golos Text", "Segoe UI", sans-serif', weight: 700, spacing: '-0.01em' },
@@ -79,12 +118,14 @@ export const THEMES: Record<string, Theme> = {
 };
 
 /** Тема по умолчанию. В TEST_MODE её можно переключить на панели тестирования. */
-export const ACTIVE_THEME = 'honey';
+export const ACTIVE_THEME = 'clover';
 
 export function applyTheme(id: string, dark: boolean, root: HTMLElement = document.documentElement): Theme {
   const th = THEMES[id] ?? THEMES[ACTIVE_THEME];
   const pal = dark ? th.dark : th.light;
-  for (const k in pal) root.style.setProperty('--c-' + k, pal[k]);
+  // Optional entries (themes before «Клевер» do not define them).
+  const full: Record<string, string> = { 'comb-hi': pal.comb, leaf: pal.good, 'leaf-deep': pal.good, wash: 'none', 'comb-wash': 'none', ...pal };
+  for (const k in full) root.style.setProperty('--c-' + k, full[k]);
   root.style.setProperty('--font-display', th.fonts.display);
   root.style.setProperty('--font-body', th.fonts.body);
   root.style.setProperty('--fw-display', String(th.fonts.weight));

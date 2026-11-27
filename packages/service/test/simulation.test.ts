@@ -3,7 +3,7 @@ import {
   applyPurchase,
   balanceFromLedger,
   cardPosition,
-  defaultRules,
+  RULES_V1_PLACEHOLDER,
   deriveLevel,
   emptyClientState,
   parseRules,
@@ -15,7 +15,7 @@ import {
 } from '@honey/core';
 import { ClientSimulation, InMemoryRepository, LoyaltyService, NullNotifier } from '../src/index.js';
 
-const rules = parseRules({ ...defaultRules, welcomeBonus: 5_000 });
+const rules = parseRules({ ...RULES_V1_PLACEHOLDER, welcomeBonus: 5_000 });
 const day = (n: number, hour = 10) => new Date(Date.UTC(2026, 4, 1 + n, hour - 5));
 
 /** Same script through LoyaltyService (a moving clock + storage) and through ClientSimulation. */

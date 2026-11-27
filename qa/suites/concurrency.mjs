@@ -99,11 +99,11 @@ export async function run() {
   s.check(`${N} parallel distinct adjustments: entries = accepted`, rs6b.every((r) => r.status === 200 || r.status === 409) && a6b.n === 1 + rs6b.filter((r) => r.status === 200).length, { hist: statusHist(rs6b), n: a6b.n });
 
   // 7. parallel registrations with the same phone
-  const rs7 = await Promise.all(Array.from({ length: N }, (_, i) => as(900_210_000 + i).post('/api/test/register', { phone: '+998977777777', name: `Гонка ${i}` })));
+  const rs7 = await Promise.all(Array.from({ length: N }, (_, i) => as(900_210_000 + i).post('/api/test/register', { consent: true, phone: '+998977777777', name: `Гонка ${i}` })));
   metrics.samePhoneRegistrations = () => statusHist(rs7);
   const [p7] = await sql(`SELECT COUNT(*) AS n FROM clients WHERE phone = '+998977777777'`);
   s.check(`${N} parallel registrations, same phone: one 201, others 409, no 5xx`, rs7.filter((r) => r.status === 201).length === 1 && rs7.every((r) => r.status === 201 || r.status === 409) && p7.n === 1, statusHist(rs7));
-  const rs7b = await Promise.all(Array.from({ length: N }, () => as(900_220_000).post('/api/test/register', { phone: '+998977777700', name: 'Двойник' })));
+  const rs7b = await Promise.all(Array.from({ length: N }, () => as(900_220_000).post('/api/test/register', { consent: true, phone: '+998977777700', name: 'Двойник' })));
   metrics.oneUserRegistrations = () => statusHist(rs7b);
   const [p7b] = await sql(`SELECT COUNT(*) AS n FROM clients WHERE telegram_id = 900220000`);
   s.check(`${N} parallel registrations of ONE user: all 201 (idempotent, L4), one client`, rs7b.every((r) => r.status === 201) && p7b.n === 1 && new Set(rs7b.map((r) => r.body?.client?.id)).size === 1, statusHist(rs7b));

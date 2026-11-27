@@ -3,6 +3,7 @@ import {
   applyPurchase,
   balanceFromLedger,
   cardPosition,
+  RULES_V1_PLACEHOLDER,
   defaultRules,
   deriveLevel,
   emptyClientState,
@@ -41,9 +42,9 @@ function merge<T>(base: T, patch: DeepPartial<T> | undefined): T {
   return out as T;
 }
 
-/** Default rules with overrides, validated by the zod schema. */
+/** The pre-questionnaire placeholder rules (RULES_V1_PLACEHOLDER) with overrides, validated by the zod schema. Tests of the owner rules use `ownerRules()`. */
 export function makeRules(patch?: DeepPartial<LoyaltyRules>): LoyaltyRules {
-  return parseRules(merge(defaultRules, patch));
+  return parseRules(merge(RULES_V1_PLACEHOLDER, patch));
 }
 
 export const flowers = (amount: number) => [{ category: 'flowers' as Category, amount }];
@@ -126,4 +127,9 @@ export class Sim {
 
 export function eventTypes(o: Outcome): string[] {
   return o.events.map((e) => e.type);
+}
+
+/** The owner's rules (defaultRules: levels by count, sticky, 180-day мёд, birthday gift) with overrides. */
+export function ownerRules(patch?: DeepPartial<LoyaltyRules>): LoyaltyRules {
+  return parseRules(merge(defaultRules, patch));
 }

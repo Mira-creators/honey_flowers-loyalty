@@ -40,15 +40,15 @@ export async function run() {
   const cb = (paid, lvl = 'bee') => pctOf(paid, pct(lvl));
 
   // ---------------------------------------------------------------- 1. registration by phone
-  const regA = await as(A).post('/api/test/register', { phone: '+998 (90) 123-45-67', name: 'Дилноза' });
+  const regA = await as(A).post('/api/test/register', { consent: true, phone: '+998 (90) 123-45-67', name: 'Дилноза' });
   s.eq('register: 201', regA.status, 201);
   const a0 = regA.body.client;
   s.check('register: phone normalized and masked', a0.phoneMasked === '+998 90 ••• •• 67', a0.phoneMasked);
   s.eq('register: empty card', [a0.balance, a0.card.filled, a0.card.cycle, a0.level.id, a0.gifts.length, a0.expiresOn], [0, 0, 1, 'bee', 0, null]);
   s.check('register: code HF + 4..6 digits', /^HF\d{4,6}$/.test(a0.code), a0.code);
-  const regDup = await as(B).post('/api/test/register', { phone: '998901234567', name: 'Чужой' });
+  const regDup = await as(B).post('/api/test/register', { consent: true, phone: '998901234567', name: 'Чужой' });
   s.eq('register: same phone on another Telegram account → 409', regDup.status, 409);
-  s.eq('register: invalid phone → 400', (await as(B).post('/api/test/register', { phone: '12-34', name: 'x' })).status, 400);
+  s.eq('register: invalid phone → 400', (await as(B).post('/api/test/register', { consent: true, phone: '12-34', name: 'x' })).status, 400);
   const id = a0.id;
   const f = as(FLORIST);
   for (const [q, label] of [[a0.code, 'code'], [a0.code.toLowerCase(), 'lower-case code'], [`HF:${a0.code}`, 'QR payload'], ['+998 90 123 45 67', 'full phone'], ['901234567', 'national phone'], [id, 'client id']]) {

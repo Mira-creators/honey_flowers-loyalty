@@ -4,7 +4,7 @@ import type {
   WebLinkDTO,
   Role, TestRunExpiryDTO, ApiError, OwnerGrantRequest, OwnerGrantResultDTO, TestDemoSeedDTO, TestDemoClearDTO,
   ClientListDTO, ClientSort, ClientStatus, OwnerClientDTO, AdjustRequest, AdjustResultDTO,
-  NoteDTO, ExportLinkRequest, ExportLinkDTO, OwnerHistoryPageDTO,
+  NoteDTO, ExportLinkRequest, ExportLinkDTO, OwnerHistoryPageDTO, LegalDTO, PhoneCreditDTO,
 } from '@honey/contracts';
 import { tg } from './tg';
 
@@ -64,6 +64,11 @@ async function req<T>(method: string, path: string, body?: unknown, extraHeaders
 export const api = {
   me: () => req<MeDTO>('GET', '/api/me'),
   setLang: (b: SetLangRequest) => req<unknown>('POST', '/api/me/lang', b),
+  legal: () => req<LegalDTO>('GET', '/api/legal'),
+  consent: (version: string) => req<MeDTO>('POST', '/api/me/consent', { version }),
+  setBirthday: (birthday: string) => req<MeDTO>('POST', '/api/me/birthday', { birthday }),
+  creditPhone: (phone: string) => req<PhoneCreditDTO>('POST', '/api/staff/client/by-phone', { phone }),
+  ownerBirthday: (id: string, birthday: string | null) => req<OwnerClientDTO>('PUT', `/api/owner/clients/${encodeURIComponent(id)}/birthday`, { birthday }),
 
   lookup: (q: string) => req<StaffClientLookupDTO>('GET', '/api/staff/client?q=' + encodeURIComponent(q)),
   preview: (b: PurchasePreviewRequest) => req<PurchasePreviewDTO>('POST', '/api/staff/purchase/preview', b),
@@ -102,6 +107,8 @@ export const api = {
     register: (phone: string, name: string) => req<unknown>('POST', '/api/test/register', { phone, name }),
     demoSeed: (chunk: number) => req<TestDemoSeedDTO>('POST', '/api/test/demo-seed', { chunk }),
     demoClear: () => req<TestDemoClearDTO>('POST', '/api/test/demo-clear', {}),
+    /** «Склад» demo (STOCK_ENABLED), chunks 0…5 after demoSeed. */
+    demoStock: (chunk: number) => req<{ nextChunk: number | null }>('POST', '/api/test/demo-stock', { chunk }),
   },
 };
 

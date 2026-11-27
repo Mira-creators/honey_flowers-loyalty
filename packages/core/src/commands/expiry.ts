@@ -1,6 +1,7 @@
-import { emptyOutcome, type Outcome } from '../outcome.js';
+import { applyOutcome, emptyOutcome, mergeOutcomes, type Outcome } from '../outcome.js';
+import { birthdayCheck } from './birthday.js';
 import type { LoyaltyRules } from '../rules.js';
-import { balanceOf, cardPosition, deriveLevel, expiryInfo, lastExpiry } from '../state.js';
+import { balanceOf, cardPosition, deriveLevel, expiryInfo, lastExpiry, levelReset } from '../state.js';
 import type { ClientState } from '../types.js';
 
 /**
@@ -93,15 +94,27 @@ export function settleExpiry(rules: LoyaltyRules, state: ClientState, now: Date)
 }
 
 /**
- * Scheduler entry point for one client: expires points that are due and
- * emits expiry warnings `expiryWarnDays` days before expiry.
+ * Scheduler entry point for one client (the daily job):
+ *  - мёд: expires points that are due and emits warnings `expiryWarnDays` days before expiry;
+ *  - level (levels.mode 'sticky', a SEPARATE timer): warnings `resetWarnDays` days before the level
+ *    resets and one `level_down` (reason 'inactivity') on the reset day — the reset itself is derived
+ *    (state.ts deriveLevel), the stored key only makes the message go out once;
+ *  - birthday gift: unlocked when its window comes, revoked after its last day (commands/birthday.ts).
  *
- * Warnings are deduplicated with keys `expiry_warning:<anchor>:<day>` kept in
- * `state.sentNotificationKeys`. If the scheduler missed a day, only the most
- * urgent pending warning is sent (with the real number of days left) and the
- * skipped ones are marked as sent.
+ * Warnings are deduplicated with keys kept in `state.sentNotificationKeys`
+ * (`expiry_warning:<anchor>:<day>`, `level_warning:<anchor>:<day>`, `level_reset:<anchor>`). If the
+ * scheduler missed a day, only the most urgent pending warning is sent (with the real number of days
+ * left) and the skipped ones are marked as sent.
  */
 export function runExpiry(rules: LoyaltyRules, state: ClientState, now: Date): Outcome {
+  const honey = honeyExpiry(rules, state, now);
+  const afterHoney = applyOutcome(state, honey);
+  const level = levelTimer(rules, afterHoney, now);
+  const birthday = birthdayCheck(rules, applyOutcome(afterHoney, level), now);
+  return mergeOutcomes(mergeOutcomes(honey, level), birthday);
+}
+
+function honeyExpiry(rules: LoyaltyRules, state: ClientState, now: Date): Outcome {
   const expired = settleExpiry(rules, state, now);
   if (expired.ledger.length || expired.levelOverride !== undefined || expired.cardMoves.length) return expired;
 
@@ -126,5 +139,29 @@ export function runExpiry(rules: LoyaltyRules, state: ClientState, now: Date): O
     balance,
     expiresOn: info.expiresOn,
   });
+  return out;
+}
+
+/** Sticky level: reminders before the reset and one message on the reset day (see runExpiry). */
+export function levelTimer(rules: LoyaltyRules, state: ClientState, now: Date): Outcome {
+  const out = emptyOutcome();
+  const r = levelReset(rules, state, now);
+  if (!r) return out;
+  const tiers = rules.levels.tiers;
+  const sent = new Set(state.sentNotificationKeys);
+  if (r.daysLeft <= 0) {
+    const key = `level_reset:${r.anchorKey}`;
+    if (sent.has(key)) return out;
+    out.notificationKeys.push(key);
+    out.events.push({ type: 'level_down', clientId: state.clientId, from: tiers[r.index]!.id, to: tiers[0]!.id, reason: 'inactivity' });
+    return out;
+  }
+  const pending = [...new Set(rules.levels.resetWarnDays)]
+    .filter((d) => r.daysLeft <= d)
+    .map((d) => `level_warning:${r.anchorKey}:${d}`)
+    .filter((k) => !sent.has(k));
+  if (!pending.length) return out;
+  out.notificationKeys.push(...pending);
+  out.events.push({ type: 'level_reset_warning', clientId: state.clientId, levelId: tiers[r.index]!.id, daysLeft: r.daysLeft, resetsOn: r.resetsOn });
   return out;
 }

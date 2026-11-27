@@ -1,6 +1,7 @@
 import type { EditableRulesDTO, MeDTO } from '@honey/contracts';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { call, commandUpdate, contactUpdate, json, makeStaff, messageUpdate, mockTelegram, repo, resetDb, T, tmaHeader, webhook } from './helpers.js';
+import { CONSENT_VERSION } from '../src/lib/legal.js';
+import { botOpts, call, callbackUpdate, commandUpdate, contactUpdate, json, makeStaff, messageUpdate, mockTelegram, repo, resetDb, T, tmaHeader, webhook } from './helpers.js';
 
 const USER = 6001;
 const OWNER = T + 1;
@@ -21,16 +22,21 @@ describe('telegram webhook', () => {
     expect(tg.calls).toHaveLength(0);
   });
 
-  it('/start for a new user: greeting with ru+uz, request_contact keyboard and web_app button', async () => {
+  it('/start for a new user: greeting with ru+uz, «Как работает» + the texts + «Принимаю» BEFORE the contact keyboard (Д1)', async () => {
     const res = await webhook(commandUpdate(USER, '/start'));
     expect(res.status).toBe(200);
-    const [greet, card] = tg.sent();
+    const [greet, consent, card] = tg.sent();
     expect(String(greet!.payload.text)).toMatch(/Здравствуйте, Амалия!/);
     expect(String(greet!.payload.text)).toMatch(/Assalomu alaykum/);
-    expect(greet!.payload.reply_markup).toMatchObject({
-      keyboard: [[{ text: '📱 Поделиться номером', request_contact: true }]],
-      resize_keyboard: true,
-      one_time_keyboard: true,
+    expect(greet!.payload.reply_markup).toEqual({ remove_keyboard: true });
+    expect(String(consent!.payload.text)).toContain('Как работает Медовая карта');
+    expect(String(consent!.payload.text)).toContain('Черновик');
+    expect(consent!.payload.reply_markup).toEqual({
+      inline_keyboard: [
+        [{ text: '📄 Правила программы', web_app: { url: 'https://honey.example.workers.dev/?page=rules' } }],
+        [{ text: '🔒 Согласие на обработку данных', web_app: { url: 'https://honey.example.workers.dev/?page=consent' } }],
+        [{ text: '✅ Принимаю', callback_data: `consent:${CONSENT_VERSION}` }],
+      ],
     });
     // Menu: Mini App + help + language (no owner summary for a client).
     expect(card!.payload.reply_markup).toEqual({
@@ -42,6 +48,26 @@ describe('telegram webhook', () => {
         ],
       ],
     });
+    // A contact before «Принимаю» creates nothing and shows the texts again.
+    botOpts.autoConsent = false;
+    try {
+      await webhook(contactUpdate(USER, '+998907654300'));
+      expect(await repo().findClientByTelegramId(USER)).toBeNull();
+      expect(String(tg.sent().at(-2)!.payload.text)).toContain('сначала примите правила');
+      // «Принимаю» → stored, then the contact keyboard
+      await webhook(callbackUpdate(USER, `consent:${CONSENT_VERSION}`));
+      expect((await repo().getTgConsent(USER))?.version).toBe(CONSENT_VERSION);
+      expect(tg.sent().at(-1)!.payload.reply_markup).toMatchObject({ keyboard: [[{ text: '📱 Поделиться номером', request_contact: true }]], one_time_keyboard: true });
+      // the next /start goes straight to the contact keyboard
+      await webhook(commandUpdate(USER, '/start'));
+      expect(tg.sent().at(-2)!.payload.reply_markup).toMatchObject({ keyboard: [[{ text: '📱 Поделиться номером', request_contact: true }]] });
+      // the contact now registers the card with the consent version
+      await webhook(contactUpdate(USER, '+998907654300'));
+      const client = await repo().findClientByTelegramId(USER);
+      expect(client?.consentVersion).toBe(CONSENT_VERSION);
+    } finally {
+      botOpts.autoConsent = true;
+    }
     // getMe is called once and cached.
     await webhook(commandUpdate(USER, '/card'));
     expect(tg.calls.filter((c) => c.method === 'getMe')).toHaveLength(1);

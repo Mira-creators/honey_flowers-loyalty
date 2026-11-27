@@ -1,0 +1,14 @@
+/* The bumblebee mascot (ui/mascot.ts): shared by the Mini App and the owner console. */
+.bumble .bee-fuzz { fill: none; stroke: var(--c-bee-body); stroke-width: 2.2; stroke-dasharray: .9 1.5; stroke-linecap: round; opacity: .9; }
+.bumble .bee-body { stroke: none; }
+.bumble .bee-band { fill: var(--c-bee-stripe); opacity: .92; }
+.bumble .bee-tail { fill: var(--c-accent); }
+.bumble .bee-head { fill: var(--c-bee-stripe); }
+.bumble .bee-eye { fill: #fff; opacity: .9; }
+.bumble .bee-ant, .bumble .bee-leg, .bumble .bee-sting { fill: none; stroke: var(--c-bee-stripe); stroke-width: 1.3; stroke-linecap: round; }
+.bumble .wing { fill: var(--c-wing); fill-opacity: .55; stroke: var(--c-bee-line); stroke-opacity: .35; stroke-width: .7; }
+.bumble .wing.rest { animation: none; }
+.bumble .bee-spark { fill: var(--c-accent); }
+.bumble .bee-spark.p { fill: var(--c-petal-deep); }
+.bumble.celebrating { animation: cheer 1.2s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+@keyframes cheer { 50% { transform: translateY(-3px) rotate(-4deg); } }

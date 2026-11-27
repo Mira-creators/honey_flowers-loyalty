@@ -276,7 +276,7 @@ class Runner {
   async register(index) {
     const user = USER0 + index;
     const now = this.m.now();
-    const r = await as(user).post('/api/test/register', { phone: `+99899${String(index).padStart(7, '0')}`, name: `Модель ${index}` });
+    const r = await as(user).post('/api/test/register', { consent: true, phone: `+99899${String(index).padStart(7, '0')}`, name: `Модель ${index}` });
     this.stats.requests++;
     if (r.status !== 201) throw new Error(`model register ${index}: ${r.status} ${r.text}`);
     const c = { index, user, id: r.body.client.id, registeredAt: now, purchases: [], ledger: [], moves: [], rewards: [], keys: new Set() };
@@ -459,7 +459,17 @@ async function freshStart(nClients, runner, list = null) {
   await setRole(OWNER, 'owner');
   await setRole(FLORIST, 'florist');
   await setRole(CLOCKER, 'client');
-  const rules = (await as(OWNER).get('/api/owner/rules')).body;
+  let rules = (await as(OWNER).get('/api/owner/rules')).body;
+  // The model implements levels by SUM over all time, always the current metric (the 'rolling'
+  // alternative of Л1) and no birthday gift: switch the owner rules to that (the sticky count-based
+  // levels have their own engine model test, packages/core/test/ownerRules.test.ts).
+  if (rules.levelBy !== 'sum' || rules.levelMode !== 'rolling' || rules.levelWindowDays !== null || rules.birthdayEnabled) {
+    const legacy = { ...rules, levelBy: 'sum', levelMode: 'rolling', levelWindowDays: null, birthdayEnabled: false,
+      levels: rules.levels.map((l, i) => ({ ...l, from: [0, 2_000_000, 6_000_000, 10_000_000, 20_000_000][i] ?? l.from })) };
+    const r = await as(OWNER).put('/api/owner/rules', legacy);
+    if (r.status !== 200) throw new Error(`model: rules switch failed ${r.status} ${r.text}`);
+    rules = r.body;
+  }
   runner.m.rules = rules;
   for (let k = 0; k < nClients; k++) if (!list || list.includes(k)) await runner.register(k);
 }

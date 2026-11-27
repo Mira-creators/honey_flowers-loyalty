@@ -34,14 +34,14 @@ describe('L4: a concurrent double registration of the same user is idempotent', 
       }
       return orig.call(this, id);
     });
-    const r = await call('/api/test/register', { user: T + 50, body: { phone: '+998901234560', name: 'Анна' } });
+    const r = await call('/api/test/register', { user: T + 50, body: { consent: true, phone: '+998901234560', name: 'Анна' } });
     expect(r.status).toBe(201);
     expect((await json<MeDTO>(r)).client!.id).toBe(me.client!.id);
     expect(Number((await testEnv.DB.prepare('SELECT COUNT(*) AS n FROM clients').first<{ n: number }>())!.n)).toBe(1);
   });
 
   it('20 parallel registrations of one user: all succeed with one client', async () => {
-    const rs = await Promise.all(Array.from({ length: 20 }, () => call('/api/test/register', { user: T + 60, body: { phone: '+998901234561', name: 'Двойник' } })));
+    const rs = await Promise.all(Array.from({ length: 20 }, () => call('/api/test/register', { user: T + 60, body: { consent: true, phone: '+998901234561', name: 'Двойник' } })));
     expect(rs.map((r) => r.status)).toEqual(Array(20).fill(201));
     expect(Number((await testEnv.DB.prepare('SELECT COUNT(*) AS n FROM clients').first<{ n: number }>())!.n)).toBe(1);
     void repo;

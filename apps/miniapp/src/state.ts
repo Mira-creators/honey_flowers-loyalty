@@ -1,11 +1,11 @@
 import type {
   MeDTO, Lang, ClientSummaryDTO, PurchasePreviewDTO, PurchaseResultDTO, OwnerStatsDTO, EditableRulesDTO, StaffDTO, OperationDTO,
-  ClientRowDTO, ClientSort, ClientStatus, OwnerClientDTO,
+  ClientRowDTO, ClientSort, ClientStatus, OwnerClientDTO, LegalDTO,
 } from '@honey/contracts';
 import { ACTIVE_THEME } from './config/themes';
 
 export type ClientScreen = 'home' | 'card' | 'gifts' | 'profile';
-export type OwnerTab = 'desk' | 'stats' | 'clients' | 'rules' | 'staff' | 'ops';
+export type OwnerTab = 'desk' | 'stats' | 'clients' | 'rules' | 'staff' | 'ops' | 'stock'; // 'stock': «Склад» (screens/stock)
 
 /** Owner «Клиенты»: list (search, status chip, sort, cursor paging) and the opened client card. */
 export interface ClientsState {
@@ -31,6 +31,8 @@ export interface StaffState {
   step: 'find' | 'client' | 'done';
   query: string;
   matches: Array<{ id: string; name: string; phoneMasked: string }>;
+  /** Л9: a full phone nobody has — offer «Начислить на номер». */
+  phoneCandidate: string | null;
   client: ClientSummaryDTO | null;
   amount: string;
   redeem: boolean;
@@ -57,6 +59,14 @@ export const S = {
   waitingContact: false,
   /** Staff / owner looking at their OWN client card («Моя карта»), see screens/myCard.ts. */
   myCard: false,
+  /** Д1: texts and bullets (GET /api/legal), loaded on demand. */
+  legal: null as LegalDTO | null,
+  /** An in-app legal page is open (also `?page=rules|consent` from the bot). */
+  legalPage: null as 'rules' | 'consent' | null,
+  /** The «Принимаю» checkbox of the onboarding / re-consent screen. */
+  consentChecked: false,
+  /** Л6: the client closed the «укажите день рождения» card in this session. */
+  bdayDismissed: false,
   staff: null as unknown as StaffState,
   owner: {
     tab: 'stats' as OwnerTab,
@@ -76,7 +86,7 @@ export const S = {
 
 export function resetStaff(keepRecent = true) {
   S.staff = {
-    step: 'find', query: '', matches: [], client: null, amount: '', redeem: false, giftId: null, channel: 'store',
+    step: 'find', query: '', matches: [], phoneCandidate: null, client: null, amount: '', redeem: false, giftId: null, channel: 'store',
     preview: null, previewError: null, idem: '', result: null, busy: false, recent: keepRecent && S.staff ? S.staff.recent : null, recentError: false,
   };
 }

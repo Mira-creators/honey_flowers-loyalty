@@ -9,7 +9,7 @@ import {
   emptyClientState,
   expiryInfo,
   levelTotals,
-  monthsBeforeKey,
+  levelHistoryFrom,
   manualAdjust,
   maxRedeemable,
   redeem,
@@ -20,7 +20,7 @@ import {
   type LoyaltyRules,
   type Outcome,
 } from '../src/index.js';
-import { at, flowers, makeRules, plusDays } from './helpers.js';
+import { at, flowers, makeRules, ownerRules, plusDays } from './helpers.js';
 
 /**
  * Bounded states (ClientState.folded): storage loads only the latest purchases and the rows a
@@ -40,7 +40,7 @@ function rng(seed: number) {
 }
 
 /** Cut a full state the way D1Repository's bounded loader does (keep = latest purchases kept). */
-export function bounded(full: ClientState, keep: number, hint: { purchaseId?: string; keys?: string[]; rewardIds?: string[]; windowFrom?: Date } = {}): ClientState {
+export function bounded(full: ClientState, keep: number, hint: { purchaseId?: string; keys?: string[]; rewardIds?: string[]; windowFrom?: Date; allStatuses?: boolean } = {}): ClientState {
   const byTime = [...full.purchases].sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
   const ids = new Set(byTime.slice(-keep).map((p) => p.id));
   const active = byTime.filter((p) => p.status === 'active');
@@ -54,8 +54,8 @@ export function bounded(full: ClientState, keep: number, hint: { purchaseId?: st
     if (unlocker) ids.add(unlocker);
   }
   for (const p of full.purchases) if (hint.keys?.includes(p.idempotencyKey)) ids.add(p.id);
-  // level window: every active purchase inside it is loaded
-  if (hint.windowFrom) for (const p of active) if (p.createdAt.getTime() >= hint.windowFrom.getTime()) ids.add(p.id);
+  // level window: every active purchase inside it is loaded (sticky: every purchase, reversed too)
+  if (hint.windowFrom) for (const p of hint.allStatuses ? byTime : active) if (p.createdAt.getTime() >= hint.windowFrom.getTime()) ids.add(p.id);
   const purchases = full.purchases.filter((p) => ids.has(p.id));
 
   const ledger = new Set<(typeof full.ledger)[number]>();
@@ -123,12 +123,14 @@ function scenario(rules: LoyaltyRules, seed: number, steps: number) {
     now = new Date(now.getTime() + Math.floor(r() * (r() < 0.15 ? 120 : 6)) * 86_400_000 + 3_600_000);
     const x = r();
     const keep = 1 + Math.floor(r() * 4);
-    const windowFrom = rules.levels.windowMonths ? new Date(`${monthsBeforeKey(now, rules.levels.windowMonths, rules.timezone)}T00:00:00+05:00`) : undefined;
+    const lh = levelHistoryFrom(rules, now);
+    const windowFrom = lh?.from;
+    const allStatuses = lh?.allStatuses;
     let o: Outcome | null = null;
     const both = (f: (st: ClientState) => Outcome, hint: Parameters<typeof bounded>[2] = {}) => {
       let full: Outcome | Error, part: Outcome | Error;
       try { full = f(s); } catch (e) { full = e as Error; }
-      try { part = f(bounded(s, keep, { ...hint, windowFrom })); } catch (e) { part = e as Error; }
+      try { part = f(bounded(s, keep, { ...hint, windowFrom, allStatuses })); } catch (e) { part = e as Error; }
       if (full instanceof Error || part instanceof Error) {
         expect(String(part), `step ${i} seed ${seed}`).toBe(String(full));
         return null;
@@ -140,7 +142,7 @@ function scenario(rules: LoyaltyRules, seed: number, steps: number) {
       const id = `p${++n}`;
       const key = `k${n}`;
       const amount = [60_000, 150_000, 400_000, 1_200_000, 3_000_000][Math.floor(r() * 5)]!;
-      const st = bounded(s, keep, { keys: [key], windowFrom });
+      const st = bounded(s, keep, { keys: [key], windowFrom, allStatuses });
       const max = maxRedeemable(rules, st, flowers(amount), null, now);
       expect(max).toBe(maxRedeemable(rules, s, flowers(amount), null, now));
       const pts = r() < 0.3 ? max : 0;
@@ -162,7 +164,7 @@ function scenario(rules: LoyaltyRules, seed: number, steps: number) {
     }
     if (o) s = applyOutcome(s, o);
     // derived values
-    const b = bounded(s, keep, { windowFrom });
+    const b = bounded(s, keep, { windowFrom, allStatuses });
     expect(balanceOf(b)).toBe(balanceOf(s));
     expect(deriveLevel(rules, b, now)).toEqual(deriveLevel(rules, s, now));
     expect(deriveLevel(rules, b, plusDays(now, 40))).toEqual(deriveLevel(rules, s, plusDays(now, 40)));
@@ -181,6 +183,8 @@ describe('bounded state (ClientState.folded) == full state', () => {
     ['level down on expiry, count criterion', makeRules({ welcomeBonus: 5_000, levels: { criterion: 'count', tiers: [{ id: 'bee', title: 'Пчёлка', threshold: 0, cashbackPct: 1 }, { id: 'worker', title: 'Труженица', threshold: 3, cashbackPct: 3 }, { id: 'queen', title: 'Королева', threshold: 6, cashbackPct: 5 }] }, expiry: { onExpiry: 'balance_and_level_down' } })],
     ['reset all on expiry', makeRules({ welcomeBonus: 5_000, expiry: { onExpiry: 'reset_all' }, honeycomb: { maxCellsPerDay: 2 } })],
     ['level window 3 months', makeRules({ welcomeBonus: 5_000, levels: { windowMonths: 3 } })],
+    ['owner rules: sticky levels by count, 90-day window', ownerRules()],
+    ['sticky, sum criterion, level down on expiry', ownerRules({ levels: { criterion: 'sum', oncePerDay: false, resetAfterDays: 30, resetWarnDays: [5], tiers: [{ id: 'bee', title: 'Пчёлка', threshold: 0, cashbackPct: 1 }, { id: 'q', title: 'К', threshold: 500_000, cashbackPct: 3 }, { id: 'g', title: 'З', threshold: 2_000_000, cashbackPct: 5 }] }, expiry: { expiryDays: 20, onExpiry: 'balance_and_level_down' } })],
   ];
   for (const [name, rules] of families) {
     it(`${name}: 40 random histories × 60 commands`, () => {

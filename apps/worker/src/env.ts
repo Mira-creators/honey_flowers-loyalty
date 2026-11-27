@@ -49,6 +49,9 @@ export interface Env {
   /** Name of this deployment shown in alerts and /health, e.g. "honey-loyalty-dev (dev)". */
   ENV_NAME?: string;
 
+  /** «Склад» prototype: "1" = stock routes and screens on; anything else → every stock route is 404. */
+  STOCK_ENABLED?: string;
+
   /** Tests only: base URL of the Telegram Bot API (default https://api.telegram.org). */
   TELEGRAM_API_BASE?: string;
 }

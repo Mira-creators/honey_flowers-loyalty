@@ -30,6 +30,7 @@ export default defineConfig(async () => {
         '@honey/core': fileURLToPath(new URL('../../packages/core/src/index.ts', import.meta.url)),
         '@honey/service': fileURLToPath(new URL('../../packages/service/src/index.ts', import.meta.url)),
         '@honey/contracts': fileURLToPath(new URL('../../packages/contracts/src/index.ts', import.meta.url)),
+        '@honey/stock': fileURLToPath(new URL('../../packages/stock/src/index.ts', import.meta.url)),
       },
     },
     test: {

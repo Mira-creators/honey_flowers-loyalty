@@ -1,6 +1,6 @@
 import type { LevelTier, LoyaltyRules } from './rules.js';
 import type { CardMove, CellReward, ClientState, LedgerEntry, PurchaseRecord, Reward, Uzs } from './types.js';
-import { calendarDaysBetween, keyFromDayNumber, localDateKey, localDayNumber, monthsBeforeKey } from './time.js';
+import { calendarDaysBetween, dayNumberFromKey, keyFromDayNumber, localDateKey, localDayNumber, monthsBeforeKey } from './time.js';
 
 /**
  * Derived values. Everything here is a pure function of (rules, state, now).
@@ -66,49 +66,186 @@ export function levelTotals(state: ClientState): { sum: Uzs; count: number } {
 export interface LevelInfo {
   tier: LevelTier;
   index: number;
-  /** Metric used for the level (UZS sum or purchase count) within the window. */
+  /** Metric used for the level (UZS sum or purchase count) within the window, at `now`. */
   metric: number;
   /** Where the metric is counted from (local date key), null = all time. */
   countedFrom: string | null;
   next: { tier: LevelTier; remaining: number } | null;
+  /**
+   * levels.mode 'sticky' and a level above the first: the LOCAL date on which the level resets to the
+   * first tier unless the client buys before (last purchase day + resetAfterDays). null otherwise.
+   */
+  resetsOn: string | null;
+}
+
+/** First local day (inclusive) of the level window at `at`; null = all time. */
+export function levelWindowStartKey(rules: LoyaltyRules, at: Date): string | null {
+  const { windowMonths, windowDays } = rules.levels;
+  const tz = rules.timezone;
+  if (windowDays) return keyFromDayNumber(localDayNumber(at, tz) - windowDays + 1);
+  if (windowMonths) return monthsBeforeKey(at, windowMonths, tz);
+  return null;
+}
+
+/**
+ * The level metric at instant `at`: active purchases made at or before `at`, at/after the level
+ * override, inside the window; the UZS sum, the number of purchases, or (count + oncePerDay) the
+ * number of distinct local days with a purchase. Folded (not loaded) purchases count only for an
+ * all-time level: with a window, storage loads every active purchase inside it.
+ */
+export function levelMetricAt(rules: LoyaltyRules, state: ClientState, at: Date): { metric: number; countedFrom: string | null } {
+  const { criterion, oncePerDay } = rules.levels;
+  const tz = rules.timezone;
+  const startKey = levelWindowStartKey(rules, at);
+  const override = state.levelOverride;
+  const counted = activePurchases(state).filter((p) => {
+    if (p.createdAt.getTime() > at.getTime()) return false;
+    // Purchases strictly before the override are forgotten; a purchase in the
+    // same instant (expiry settled inside applyPurchase) still counts.
+    if (override && p.createdAt.getTime() < override.setAt.getTime()) return false;
+    if (startKey && localDateKey(p.createdAt, tz) < startKey) return false;
+    return true;
+  });
+  const folded = startKey ? { sum: 0, count: 0 } : foldedLevel(state);
+  let metric: number;
+  if (criterion === 'sum') metric = folded.sum + counted.reduce((s, p) => s + p.amount, 0);
+  else if (oncePerDay && startKey) metric = new Set(counted.map((p) => localDateKey(p.createdAt, tz))).size;
+  else metric = folded.count + counted.length;
+  return { metric, countedFrom: startKey };
+}
+
+/** Highest tier whose threshold the metric reaches. */
+function tierIndexFor(rules: LoyaltyRules, metric: number): number {
+  let index = 0;
+  rules.levels.tiers.forEach((t, i) => {
+    if (metric >= t.threshold) index = i;
+  });
+  return index;
+}
+
+/** Tier index of the level override (by id; by the stored index if a rules edit renamed the tier). */
+function overrideIndex(rules: LoyaltyRules, state: ClientState): number {
+  const o = state.levelOverride;
+  if (!o) return -1;
+  const tiers = rules.levels.tiers;
+  let oi = tiers.findIndex((t) => t.id === o.levelId);
+  if (oi < 0 && o.levelIndex !== undefined) oi = Math.min(o.levelIndex, tiers.length - 1);
+  return oi;
+}
+
+export interface StickyState {
+  /** Level reached by the last activity (before any inactivity reset at `now`). */
+  index: number;
+  /** Last activity that keeps the level: the latest active purchase or the override; null = none. */
+  anchor: Date | null;
+}
+
+/**
+ * Sticky level (levels.mode 'sticky') as of the last activity, WITHOUT the inactivity reset at `now`
+ * (see deriveLevel / levelReset). Definition, over the active purchases in time order: at each
+ * purchase the level drops to the first tier if `resetAfterDays` local days passed since the
+ * previous activity, then rises to the tier the metric reaches at that purchase (never falls).
+ * A level override (expiry level-down, import floor) restarts the sequence at its tier and time.
+ *
+ * Bounded history: every purchase stores its sticky level in `result.stickyLevel`. The derivation
+ * starts from the newest active purchase whose stored value is still exact — none of the purchases
+ * made before it was reversed after it — and replays only what follows (usually nothing).
+ */
+export function stickyLevel(rules: LoyaltyRules, state: ClientState, now: Date): StickyState {
+  const tiers = rules.levels.tiers;
+  const tz = rules.timezone;
+  const resetDays = rules.levels.resetAfterDays ?? Infinity;
+  const override = state.levelOverride;
+  const since = override ? override.setAt.getTime() : -Infinity;
+  const active = activePurchases(state)
+    .filter((p) => p.createdAt.getTime() <= now.getTime() && p.createdAt.getTime() >= since)
+    .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+  const reversed = state.purchases.filter((p) => p.status === 'reversed' && p.reversedAt);
+  const tainted = (t: number) => reversed.some((r) => r.createdAt.getTime() < t && r.reversedAt!.getTime() > t);
+
+  let index = 0;
+  let anchor: Date | null = null;
+  let from = 0;
+  for (let i = active.length - 1; i >= 0; i--) {
+    const p = active[i]!;
+    const id = p.result?.stickyLevel;
+    if (!id) continue;
+    const idx = tiers.findIndex((t) => t.id === id);
+    if (idx < 0 || tainted(p.createdAt.getTime())) continue;
+    index = idx;
+    anchor = p.createdAt;
+    from = i + 1;
+    break;
+  }
+  if (!anchor && override) {
+    index = Math.max(0, overrideIndex(rules, state));
+    anchor = override.setAt;
+    from = 0;
+  }
+  for (let i = from; i < active.length; i++) {
+    const p = active[i]!;
+    if (anchor && calendarDaysBetween(anchor, p.createdAt, tz) >= resetDays) index = 0;
+    index = Math.max(index, tierIndexFor(rules, levelMetricAt(rules, state, p.createdAt).metric));
+    anchor = p.createdAt;
+  }
+  return { index, anchor };
+}
+
+/**
+ * Which purchases storage must load for the level (bounded loads, apps/worker stateLoader): every
+ * purchase created at/after `from` — only active ones for a rolling window, ALL of them in sticky
+ * mode (reversed purchases tell which stored checkpoints are still exact) over the longer of the
+ * window and the reset period plus the reversal window. null = no window: totals are folded.
+ * `from` is a safe lower bound (one day early), never later than needed.
+ */
+export function levelHistoryFrom(rules: LoyaltyRules, now: Date): { from: Date; allStatuses: boolean } | null {
+  const lv = rules.levels;
+  const tz = rules.timezone;
+  const today = localDayNumber(now, tz);
+  if (lv.mode === 'sticky') {
+    const days = Math.max(lv.windowDays ?? (lv.windowMonths ? lv.windowMonths * 31 : 0), lv.resetAfterDays ?? 0) + Math.ceil(rules.reversalWindowHours / 24) + 1;
+    return { from: new Date((today - days - 1) * 86_400_000), allStatuses: true };
+  }
+  const key = levelWindowStartKey(rules, now);
+  return key ? { from: new Date((dayNumberFromKey(key) - 1) * 86_400_000), allStatuses: false } : null;
+}
+
+/** Sticky mode: when the current level resets (null: not sticky, first tier, or no activity). */
+export function levelReset(rules: LoyaltyRules, state: ClientState, now: Date): { index: number; anchor: Date; anchorKey: string; resetsOn: string; daysLeft: number } | null {
+  const lv = rules.levels;
+  if (lv.mode !== 'sticky' || !lv.resetAfterDays) return null;
+  const st = stickyLevel(rules, state, now);
+  if (st.index === 0 || !st.anchor) return null;
+  const tz = rules.timezone;
+  const anchorDay = localDayNumber(st.anchor, tz);
+  const resetDay = anchorDay + lv.resetAfterDays;
+  return { index: st.index, anchor: st.anchor, anchorKey: keyFromDayNumber(anchorDay), resetsOn: keyFromDayNumber(resetDay), daysLeft: resetDay - localDayNumber(now, tz) };
 }
 
 /**
  * Level of the client at `now`.
  *
  * - Only active (not reversed) purchases made at or before `now` count.
- * - criterion 'sum' uses the gross purchase amount; 'count' the number of purchases.
- * - With `windowMonths`, only purchases on/after the same local date N months ago count.
- * - With a level override (set by expiry), only purchases after the override
- *   count and the result is max(override, derived).
+ * - criterion 'sum' uses the gross purchase amount; 'count' the number of purchases (oncePerDay:
+ *   of local days with a purchase).
+ * - With `windowMonths` / `windowDays`, only purchases inside the window count.
+ * - 'rolling': the level is what the metric gives now; with a level override (set by expiry), only
+ *   purchases after the override count and the result is max(override, derived).
+ * - 'sticky': see stickyLevel; it resets to the first tier `resetAfterDays` local days after the
+ *   last activity.
  */
 export function deriveLevel(rules: LoyaltyRules, state: ClientState, now: Date): LevelInfo {
-  const { tiers, criterion, windowMonths } = rules.levels;
-  const tz = rules.timezone;
-  const windowStartKey = windowMonths ? monthsBeforeKey(now, windowMonths, tz) : null;
-  const override = state.levelOverride;
-
-  const counted = activePurchases(state).filter((p) => {
-    if (p.createdAt.getTime() > now.getTime()) return false;
-    // Purchases strictly before the override are forgotten; a purchase in the
-    // same instant (expiry settled inside applyPurchase) still counts.
-    if (override && p.createdAt.getTime() < override.setAt.getTime()) return false;
-    if (windowStartKey && localDateKey(p.createdAt, tz) < windowStartKey) return false;
-    return true;
-  });
-  // Folded (not loaded) purchases count only for an all-time level: with a window, storage loads
-  // every active purchase inside the window (apps/worker D1Repository bounded load).
-  const folded = windowStartKey ? { sum: 0, count: 0 } : foldedLevel(state);
-  const metric = criterion === 'sum' ? folded.sum + counted.reduce((s, p) => s + p.amount, 0) : folded.count + counted.length;
-
-  let index = 0;
-  tiers.forEach((t, i) => {
-    if (metric >= t.threshold) index = i;
-  });
-  if (override) {
-    // Match by id; if a rules edit renamed the tier, fall back to the stored index.
-    let oi = tiers.findIndex((t) => t.id === override.levelId);
-    if (oi < 0 && override.levelIndex !== undefined) oi = Math.min(override.levelIndex, tiers.length - 1);
+  const { tiers } = rules.levels;
+  const { metric, countedFrom } = levelMetricAt(rules, state, now);
+  let index: number;
+  let resetsOn: string | null = null;
+  if (rules.levels.mode === 'sticky') {
+    const r = levelReset(rules, state, now);
+    index = r && r.daysLeft > 0 ? r.index : 0;
+    if (r && r.daysLeft > 0) resetsOn = r.resetsOn;
+  } else {
+    index = tierIndexFor(rules, metric);
+    const oi = overrideIndex(rules, state);
     if (oi > index) index = oi;
   }
   const tier = tiers[index]!;
@@ -117,8 +254,9 @@ export function deriveLevel(rules: LoyaltyRules, state: ClientState, now: Date):
     tier,
     index,
     metric,
-    countedFrom: windowStartKey,
+    countedFrom,
     next: nextTier ? { tier: nextTier, remaining: Math.max(0, nextTier.threshold - metric) } : null,
+    resetsOn,
   };
 }
 

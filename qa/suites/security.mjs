@@ -83,6 +83,15 @@ export async function run() {
       allowNonJsonError: true,
     });
     s.eq('bot: contact of ANOTHER user is not accepted', [(await contact(CLIENT, '+998901112299', 42)).status, (await call(CLIENT, 'GET', '/api/me')).body?.registered], [200, false]);
+    s.eq('bot: own contact WITHOUT «Принимаю» creates no card (Д1)', [(await contact(CLIENT, '+998901112299')).status, (await call(CLIENT, 'GET', '/api/me')).body?.registered], [200, false]);
+    // «✅ Принимаю» in the bot (callback consent:<version>)
+    const version = (await call(CLIENT, 'GET', '/api/legal')).body?.version;
+    const accept = await req(null, 'POST', '/telegram/webhook', {
+      headers: { 'x-telegram-bot-api-secret-token': WEBHOOK_SECRET },
+      body: { update_id: Math.floor(Math.random() * 1e9), callback_query: { id: '1', from: { id: CLIENT, is_bot: false, first_name: 'Клиентка' }, chat_instance: '1', data: `consent:${version}`, message: { message_id: 2, date: 1, chat: { id: CLIENT, type: 'private' }, text: 'x' } } },
+      allowNonJsonError: true,
+    });
+    s.eq('bot: «Принимаю» stores the consent', [accept.status, (await call(CLIENT, 'GET', '/api/me')).body?.consent?.required], [200, false]);
     s.eq('bot: own contact registers the client', [(await contact(CLIENT, '+998901112299')).status, (await call(CLIENT, 'GET', '/api/me')).body?.registered], [200, true]);
     s.eq('client → staff endpoint 403', (await call(CLIENT, 'GET', '/api/staff/recent')).status, 403);
     s.eq('client → owner endpoint 403', (await call(CLIENT, 'GET', '/api/owner/clients')).status, 403);

@@ -87,6 +87,11 @@ export interface Reward {
    */
   grantedBy?: string | null;
   grantReason?: string | null;
+  /**
+   * Last LOCAL day (YYYY-MM-DD, inclusive) the gift may be used; after it the daily job revokes it
+   * and purchases refuse it. Birthday gifts (commands/birthday.ts); absent / null = no end.
+   */
+  validUntil?: string | null;
 }
 
 /**
@@ -140,6 +145,12 @@ export interface PurchaseSummary {
   cell: number;
   rewardsUnlocked: string[];
   balanceAfter: Uzs;
+  /**
+   * levels.mode 'sticky': the client's level right after this purchase. A checkpoint for the sticky
+   * level derivation (state.ts stickyLevel), so it never needs the whole history. Absent for results
+   * computed under 'rolling' rules.
+   */
+  stickyLevel?: string;
 }
 
 export interface PurchaseRecord {
@@ -177,6 +188,8 @@ export interface ClientState {
   rewards: Reward[];
   /** Dedupe keys of notifications already sent (e.g. expiry warnings). */
   sentNotificationKeys: string[];
+  /** Client's birthday 'YYYY-MM-DD' (optional, entered once by the client; the owner may change it). */
+  birthday?: string | null;
   /**
    * Storage may load only a BOUNDED part of a long history (apps/worker: the latest purchases, the
    * rows a command needs). `folded` sums up what is NOT in the arrays above, so every derived value

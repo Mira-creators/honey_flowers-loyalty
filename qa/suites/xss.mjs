@@ -38,7 +38,7 @@ function open(testUser, name) {
 export async function run() {
   const s = area('mini app XSS');
   const C = 900_700_001, S = 900_700_002, O = 900_700_003;
-  const reg = await as(C).post('/api/test/register', { phone: '+998977700001', name: P('xssName') });
+  const reg = await as(C).post('/api/test/register', { consent: true, phone: '+998977700001', name: P('xssName') });
   s.eq('client with an HTML name registered', reg.status, 201);
   const client = reg.body.client;
   await setRole(S, 'florist');
@@ -76,7 +76,9 @@ export async function run() {
   const ow = open(O, 'Owner');
   s.check('owner screen rendered', await ow.until(() => ow.q('[data-act="otab"]')), ow.text().slice(0, 120));
   for (const tab of ['stats', 'clients', 'rules', 'staff', 'ops']) {
-    ow.act('otab', `[data-tab="${tab}"]`);
+    // with «Склад» on, Правила / Команда / Журнал are in «Ещё» (stMore → stMoreGo)
+    if (ow.q(`[data-act="otab"][data-tab="${tab}"]`)) ow.act('otab', `[data-tab="${tab}"]`);
+    else { ow.act('stMore'); ow.act('stMoreGo', `[data-tab="${tab}"]`); }
     await ow.until(() => !ow.text().includes('Загрузка'), 4000);
     await wait(300);
     check(`owner tab ${tab}`, ow);

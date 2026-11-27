@@ -122,6 +122,8 @@ export async function d1Of(id) {
 }
 
 export const wipe = () => qa('/wipe', {});
+/** Rules version 1 of the QA database: 'placeholder' (most suites) or 'owner' (suites/ownerRules.mjs); /wipe keeps it. */
+export const useRules = (preset) => qa('/rules', { preset });
 export const newKey = (p = 'qa') => `${p}-${randomUUID()}`;
 
 export async function setRole(user, role) {
@@ -163,7 +165,7 @@ export function nextPhone() {
 }
 
 export async function register(user, name = `Клиент ${user}`, phone = phoneFor(user)) {
-  const r = await as(user).post('/api/test/register', { phone, name });
+  const r = await as(user).post('/api/test/register', { consent: true, phone, name });
   if (r.status !== 201) throw new Error(`register ${user}: ${r.status} ${r.text}`);
   return r.body.client;
 }

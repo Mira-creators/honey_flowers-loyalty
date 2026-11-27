@@ -57,17 +57,31 @@ function rulesView() {
   const d = S.owner.draft;
   if (!d) return `<h2 class="h disp">Правила</h2>${errBox() || '<p class="mut">Загрузка…</p>'}`;
   const num = (id: string, label: string, v: number, step = 1, hint = '') => `<div class="f"><label for="${id}">${label}${hint ? `<small>${hint}</small>` : ''}</label><input type="number" inputmode="decimal" id="${id}" data-input="rule" data-key="${id}" step="${step}" min="0" value="${v}"></div>`;
-  const levels = d.levels.map((l, i) => `<div class="lv-row"><input aria-label="Название уровня ${i + 1}" data-input="rule" data-key="lvname" data-i="${i}" value="${esc(l.name)}"><label class="mini">%<input type="number" min="0" max="50" data-input="rule" data-key="lvpct" data-i="${i}" value="${l.pct}"></label><label class="mini">от, сум<input type="number" min="0" step="100000" data-input="rule" data-key="lvfrom" data-i="${i}" value="${l.from}" ${i === 0 ? 'disabled' : ''}></label></div>`).join('');
+  const levels = d.levels.map((l, i) => `<div class="lv-row"><input aria-label="Название уровня ${i + 1}" data-input="rule" data-key="lvname" data-i="${i}" value="${esc(l.name)}"><label class="mini">%<input type="number" min="0" max="50" data-input="rule" data-key="lvpct" data-i="${i}" value="${l.pct}"></label><label class="mini">${d.levelBy === 'count' ? 'от, покупок' : 'от, сум'}<input type="number" min="0" step="${d.levelBy === 'count' ? 1 : 100000}" data-input="rule" data-key="lvfrom" data-i="${i}" value="${l.from}" ${i === 0 ? 'disabled' : ''}></label></div>`).join('');
+  const sel = (key: string, label: string, v: string, opts: Array<[string, string]>) => `<div class="f"><label for="r-${key}">${label}</label><select id="r-${key}" data-change="rule" data-key="${key}">${opts.map(([o, l]) => `<option value="${o}" ${o === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>`;
+  const sw = (key: string, label: string, on: boolean, hint = '') => `<label class="switch-row" for="r-${key}"><span>${label}${hint ? `<br><small class="mut">${hint}</small>` : ''}</span><input type="checkbox" id="r-${key}" data-change="rule" data-key="${key}" ${on ? 'checked' : ''} style="width:22px;height:22px"></label>`;
+  const sticky = d.levelMode === 'sticky';
+  const levelRules = `<div class="fields">
+      ${sel('levelBy', 'Уровень считается по', d.levelBy, [['count', 'числу покупок (одна в день)'], ['sum', 'сумме покупок']])}
+      <div class="f"><label for="r-levelWindowDays">За сколько последних дней<small>пусто = за всё время</small></label><input type="number" inputmode="numeric" id="r-levelWindowDays" data-input="rule" data-key="levelWindowDays" min="1" value="${d.levelWindowDays ?? ''}"></div>
+      ${sel('levelMode', 'Когда уровень снижается', d.levelMode, [['sticky', 'держится, пока клиент покупает; сброс после паузы'], ['rolling', 'всегда равен покупкам за период (может упасть)']])}
+      ${sticky ? `${num('levelResetDays', 'Сброс до первого уровня без покупок через, дней', d.levelResetDays)}<div class="f"><label for="lvwarn">Напоминать о сбросе за, дней<small>через запятую</small></label><input id="lvwarn" data-input="rule" data-key="lvwarn" value="${d.levelResetWarnDays.join(', ')}"></div>` : ''}
+    </div>`;
   const cells = Array.from({ length: d.cells }, (_, i) => i + 1).map(c => `<label>${c}<select data-change="rule" data-key="gift" data-cell="${c}"><option value="">—</option>${Object.entries(GIFT_LABELS).map(([v, l]) => `<option value="${v}" ${d.gifts[String(c)] === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>`).join('');
   const dirty = JSON.stringify(d) !== JSON.stringify(S.owner.rules);
   return `<h2 class="h disp">Правила программы</h2>${errBox()}
     <p class="mut" style="margin-top:-6px">Версия ${d.version}. Новые правила действуют для следующих покупок, прошлые не пересчитываются.</p>
-    <div class="sub">Уровни и кешбэк</div><div class="lv-list">${levels}</div>
+    <div class="sub">Уровни и кешбэк</div><div class="lv-list">${levels}</div>${levelRules}
     <div class="sub">Соты</div>
     <div class="fields">${num('minPurchaseForCell', 'Мин. сумма покупки для ячейки, сум', d.minPurchaseForCell, 10000)}${num('maxCellsPerDay', 'Ячеек в день на клиента', d.maxCellsPerDay, 1, 'защита от дробления чека')}</div>
     <div class="cells-ed">${cells}</div>
     <div class="sub">Мёд</div>
-    <div class="fields">${num('maxRedeemPct', 'Оплата мёдом, до % заказа', d.maxRedeemPct)}${num('expiryDays', 'Сгорает без покупок через, дней', d.expiryDays)}<div class="f"><label for="warn">Напоминать за, дней<small>через запятую</small></label><input id="warn" data-input="rule" data-key="warn" value="${d.expiryWarnDays.join(', ')}"></div>${num('welcomeBonus', 'Приветственный бонус, мёда', d.welcomeBonus, 1000)}${num('reversalWindowHours', 'Флорист может отменить покупку в течение, часов', d.reversalWindowHours ?? 24, 1, 'от 1 до 720; и только пока мёд и подарок за неё не потрачены')}</div>
+    <div class="fields">${num('maxRedeemPct', 'Оплата мёдом, до % заказа', d.maxRedeemPct)}${num('expiryDays', 'Сгорает без покупок через, дней', d.expiryDays)}<div class="f"><label for="warn">Напоминать за, дней<small>через запятую</small></label><input id="warn" data-input="rule" data-key="warn" value="${d.expiryWarnDays.join(', ')}"></div>${num('welcomeBonus', 'Приветственный бонус, мёда', d.welcomeBonus, 1000)}${num('reversalWindowHours', 'Отмена покупки возможна в течение, часов', d.reversalWindowHours ?? 24, 1, 'от 1 до 720; и только пока мёд и подарок за неё не потрачены')}</div>
+    <div class="sub">Отмена покупок</div>
+    ${sw('staffCanReverse', 'Сотрудники могут отменять покупки', d.staffCanReverse, 'Выключено — отменять может только владелец')}
+    <div class="sub">День рождения</div>
+    ${sw('birthdayEnabled', 'Подарок ко дню рождения', d.birthdayEnabled, 'Клиент указывает дату один раз; менять её можете только вы (карточка клиента)')}
+    ${d.birthdayEnabled ? `<div class="fields">${num('birthdayPct', 'Скидка, %', d.birthdayPct)}${num('birthdayDaysBefore', 'Появляется за, дней до ДР', d.birthdayDaysBefore)}${num('birthdayDaysAfter', 'Действует ещё, дней после ДР', d.birthdayDaysAfter)}</div><p class="mut tiny">Один раз в год. Не суммируется со скидкой за соту и не совмещается с оплатой мёдом.</p>` : ''}
     <div class="sticky-save"><button class="b acc full big" data-act="saveRules" ${!dirty || S.owner.busy ? 'disabled' : ''}>${S.owner.busy ? 'Сохраняем…' : dirty ? 'Сохранить правила' : 'Изменений нет'}</button>${dirty ? '<button class="link" data-act="discardRules">Сбросить изменения</button>' : ''}</div>`;
 }
 
@@ -102,6 +116,11 @@ function applyRuleField(d: EditableRulesDTO, el: HTMLInputElement | HTMLSelectEl
   else if (k === 'gift') { const c = el.dataset.cell!; if (v) d.gifts[c] = v; else delete d.gifts[c]; }
   else if (k === 'warn') d.expiryWarnDays = v.split(/[,\s]+/).map(x => Math.round(+x)).filter(x => x > 0).sort((a, b) => b - a);
   else if (k === 'reversalWindowHours') d.reversalWindowHours = Math.min(720, Math.max(1, n));
+  else if (k === 'levelMode') d.levelMode = v === 'rolling' ? 'rolling' : 'sticky';
+  else if (k === 'levelBy') d.levelBy = v === 'sum' ? 'sum' : 'count';
+  else if (k === 'levelWindowDays') d.levelWindowDays = v.trim() === '' ? null : Math.max(1, n);
+  else if (k === 'lvwarn') d.levelResetWarnDays = v.split(/[,\s]+/).map(x => Math.round(+x)).filter(x => x > 0).sort((a, b) => b - a);
+  else if (k === 'staffCanReverse' || k === 'birthdayEnabled') (d as unknown as Record<string, boolean>)[k] = (el as HTMLInputElement).checked;
   else (d as unknown as Record<string, number>)[k] = n;
 }
 /** Update only the save bar while the owner types, so the focused input is not rebuilt. */

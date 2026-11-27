@@ -16,12 +16,20 @@ export interface ApiError {
     code:
       | 'unauthorized' | 'expired' | 'forbidden' | 'not_found' | 'validation'
       | 'not_registered' | 'insufficient_points' | 'conflict' | 'already_reversed' | 'internal'
-      | 'self_operation';
+      | 'self_operation' | 'consent_required'
+      // 'consent_required' (409): registration before the client accepted the program rules and the
+      // personal-data consent (POST /api/me/consent first).
+      // «Склад» (stock.ts): stock_short (details: StockShortDetails), posting_in_progress, lot_used,
+      // bouquet_state, already_cancelled, already_decided, period_closed, window_expired, confirm_required, receipt_total_short
+      | 'stock_short' | 'posting_in_progress' | 'lot_used' | 'bouquet_state' | 'already_cancelled' | 'already_decided'
+      | 'period_closed' | 'window_expired' | 'confirm_required' | 'receipt_total_short';
     // 'self_operation' (403): a staff member tried to charge / redeem / hand out a gift on their OWN card
     // (allowed only for the owner in TEST_MODE).
     // 'expired' (401): Telegram initData is older than the server allows — the app must be
     // closed and reopened from Telegram (initData is refreshed only on reopen).
     message: string; // Russian, safe to show to staff
+    /** Machine-readable extras of some errors (stock_short → StockShortDetails). */
+    details?: unknown;
   };
 }
 
@@ -36,8 +44,9 @@ export interface GiftDTO {
   status: 'available' | 'used' | 'revoked';
   unlockedAt: string;
   usedAt: string | null;
-  source?: 'grant';         // 'grant' = given by the owner without a purchase (not tied to a cell); absent = honeycomb gift
+  source?: 'grant' | 'birthday'; // 'grant' = given by the owner without a purchase; 'birthday' = birthday gift; absent = honeycomb gift
   reason?: string;          // owner grant: why ("день рождения")
+  validUntil?: string;      // last day the gift may be used, 'YYYY-MM-DD' Tashkent (birthday gift)
 }
 
 export type HistoryKind = 'purchase' | 'welcome' | 'redeem' | 'expire' | 'reversal' | 'manual' | 'gift_used' | 'gift_granted';
@@ -75,6 +84,12 @@ export interface ClientSummaryDTO {
   level: LevelInfo;
   next: NextLevelInfo | null;
   card: CardDTO;
+  /** Level metric: 'count' = purchase days in the window (spent / from / left are counts), 'sum' = сум. */
+  levelBy: 'sum' | 'count';
+  /** Sticky levels: LAST day the current level is kept without a purchase ('YYYY-MM-DD'); null on the first tier. */
+  levelKeptUntil: string | null;
+  birthday: string | null;      // 'YYYY-MM-DD' if the client entered it (once; afterwards only the owner changes it)
+  unclaimed?: boolean;          // card opened by staff for a phone, nobody has claimed it in Telegram yet (Л9)
   expiresOn: string | null;     // LAST day the balance is still valid, 'YYYY-MM-DD' Tashkent (null if balance 0)
   expiresAt: string | null;     // instant the balance burns = start (00:00 Tashkent) of the day AFTER expiresOn;
                                 // kept for compatibility — show expiresOn, not this date
@@ -89,7 +104,35 @@ export interface PublicRulesDTO {
   welcomeBonus: number;
   levels: LevelInfo[];
   cells: number;
+  levelBy: 'sum' | 'count';
+  levelMode: 'rolling' | 'sticky';
+  levelWindowDays: number | null; // count/sum window in days (null = all time / months)
+  levelResetDays: number | null;  // sticky: the level resets after this many days without purchases
+  birthdayPct: number;            // birthday discount, 0 = off
+  birthdayDaysBefore: number;
+  birthdayDaysAfter: number;
+  allowDiscountWithPoints: boolean;
+  cellGifts: Record<string, string>; // cell -> gift type code (for the «Как работает» bullets)
 }
+
+/** Consent texts (Д1): GET /api/legal → LegalDTO (public, no auth needed beyond the usual). */
+export interface LegalDocDTO {
+  id: 'rules' | 'consent';
+  title: string;
+  /** Paragraphs; a paragraph starting with '## ' is a heading, '• ' a bullet. Placeholders look like [ФИО ИП]. */
+  paragraphs: string[];
+}
+export interface LegalDTO {
+  version: string;              // e.g. '2026-11-10-draft'
+  draft: boolean;               // «Черновик — требует проверки юристом»
+  summary: string[];            // 3–4 bullets «Как работает Медовая карта», generated from the active rules
+  rules: LegalDocDTO;
+  consent: LegalDocDTO;
+}
+/** POST /api/me/consent { version } → MeDTO. Before registration it is kept for this Telegram user. */
+export interface ConsentRequest { version: string }
+/** POST /api/me/birthday { birthday: 'YYYY-MM-DD' } → MeDTO. Once; 409 if already set (the owner changes it). */
+export interface BirthdayRequest { birthday: string }
 
 /** GET /api/me */
 export interface MeDTO {
@@ -104,6 +147,8 @@ export interface MeDTO {
   now: string;                  // server "now" incl. test clock offset
   clockOffsetDays: number;      // TEST_MODE time travel, 0 otherwise
   botUsername: string | null;
+  /** Д1: must the caller accept the current program rules + consent before going on? */
+  consent: { required: boolean; version: string; acceptedAt: string | null };
 }
 
 /** POST /api/me/lang */
@@ -117,7 +162,21 @@ export interface SetLangRequest { lang: Lang }
  */
 
 /** GET /api/staff/client?q=<code | phone digits | client id (UUID, e.g. picked from `matches`)> */
-export interface StaffClientLookupDTO { client: ClientSummaryDTO | null; matches: Array<{ id: string; name: string; phoneMasked: string }> }
+export interface StaffClientLookupDTO {
+  client: ClientSummaryDTO | null;
+  matches: Array<{ id: string; name: string; phoneMasked: string }>;
+  /** Л9: the query is a full phone number nobody has: the desk may offer «Начислить на номер» (E.164). */
+  phoneCandidate?: string | null;
+}
+
+/**
+ * POST /api/staff/client/by-phone { phone } — Л9: open a card for a phone that has no card yet
+ * (the client is not in the bot: 80 % of orders come by delivery). The card is claimable: when the
+ * person shares this phone in the bot / Mini App they get it with all accruals (+ welcome bonus).
+ * No messages are sent to such a card. An existing card with this phone is returned as is.
+ */
+export interface PhoneCreditRequest { phone: string }
+export interface PhoneCreditDTO { client: ClientSummaryDTO; created: boolean }
 
 /** POST /api/staff/purchase/preview — nothing is saved */
 export interface PurchasePreviewRequest { clientId: string; amount: number; redeem: boolean; giftId?: string | null; channel?: Channel }
@@ -192,6 +251,19 @@ export interface EditableRulesDTO {
   welcomeBonus: number;
   /** Staff may reverse a purchase only within this many hours (1..720, default 24). */
   reversalWindowHours: number;
+  /** Л8 «Сотрудники могут отменять покупки»: false = only the owner reverses. */
+  staffCanReverse: boolean;
+  /** Л1: 'sticky' = the level is kept while the client buys at least once per levelResetDays; 'rolling' = always the current metric. */
+  levelMode: 'rolling' | 'sticky';
+  levelBy: 'sum' | 'count';      // levels[].from are purchase counts ('count') or сум ('sum')
+  levelWindowDays: number | null; // null = all time
+  levelResetDays: number;         // sticky only
+  levelResetWarnDays: number[];   // sticky only
+  /** Л6 birthday gift */
+  birthdayEnabled: boolean;
+  birthdayPct: number;
+  birthdayDaysBefore: number;
+  birthdayDaysAfter: number;
   cells: number;                // 10 fixed for now
   gifts: Record<string, string>; // cell -> gift type
   version: number;
@@ -291,6 +363,9 @@ export interface OwnerClientDTO extends ClientSummaryDTO {
 export interface AdjustRequest { points: number; reason: string; idempotencyKey?: string }
 export interface AdjustResultDTO { client: OwnerClientDTO; replayed: boolean; warnings: string[] }
 
+/** PUT /api/owner/clients/:id/birthday { birthday: 'YYYY-MM-DD' | null } → OwnerClientDTO (only the owner changes a birthday) */
+export interface OwnerBirthdayRequest { birthday: string | null }
+
 /** PUT /api/owner/clients/:id/note { note } → { note }  (empty string clears the note) */
 export interface NoteRequest { note: string }
 export interface NoteDTO { note: string | null }
@@ -318,10 +393,13 @@ export interface TestClockRequest { days?: number; reset?: boolean }
 export interface TestRunExpiryDTO { expired: number; warned: number; checked: number; more: boolean }
 /** POST /api/test/reset-me — deletes the caller's client data (to replay onboarding) */
 /** POST /api/test/register { phone, name } — browser-only registration shortcut */
-export interface TestRegisterRequest { phone: string; name: string }
+export interface TestRegisterRequest { phone: string; name: string; consent?: boolean } // consent: accept the current texts in the same call
 
 /* ---------------- Owner web console (console.html): DTOs + import helpers ---------------- */
 export * from './console.js';
+
+/* ---------------- «Склад» (stock module prototype, STOCK_ENABLED) ---------------- */
+export * from './stock.js';
 /**
  * POST /api/test/demo-seed { chunk } — fills the program with ~250 realistic demo clients, a few
  * per request (call chunk 0, 1, … until finished). Deterministic and idempotent; demo clients are

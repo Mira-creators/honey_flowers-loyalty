@@ -44,7 +44,7 @@ export async function run({ clients: nClients = 2000, ops: nOps = 20000 } = {}) 
   const phones = new Array(nClients);
   await pool([...Array(nClients).keys()], 8, async (i) => {
     phones[i] = `+99895${String(i).padStart(7, '0')}`;
-    const r = await as(U0 + i).post('/api/test/register', { phone: phones[i], name: `${NAMES[i % NAMES.length]} ${i}` });
+    const r = await as(U0 + i).post('/api/test/register', { consent: true, phone: phones[i], name: `${NAMES[i % NAMES.length]} ${i}` });
     if (r.status !== 201) throw new Error(`seed register ${i}: ${r.status} ${r.text}`);
     ids[i] = r.body.client.id;
     codes[i] = r.body.client.code;

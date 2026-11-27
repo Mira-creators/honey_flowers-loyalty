@@ -9,7 +9,7 @@ const here = (p: string) => fileURLToPath(new URL(p, import.meta.url));
 export default defineConfig({
   resolve: {
     // Contracts are consumed as TypeScript source (types + the console's import helpers).
-    alias: { '@honey/contracts': here('../../packages/contracts/src/index.ts') },
+    alias: { '@honey/contracts': here('../../packages/contracts/src/index.ts'), '@honey/stock': here('../../packages/stock/src/index.ts') },
   },
   build: { outDir: 'dist', emptyOutDir: true, target: 'es2020' },
   server: {

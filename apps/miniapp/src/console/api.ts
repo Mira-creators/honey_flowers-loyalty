@@ -96,3 +96,6 @@ export const capi = {
   undo: (id: string) => req<ImportBatchDTO>('POST', `/api/owner/import/${encodeURIComponent(id)}/undo`, {}),
   testRole: (role: Role) => req<unknown>('POST', '/api/test/role', { role }),
 };
+
+/** Generic GET for newer sections (e.g. «Склад», views/stock.ts). */
+export const capiGet = <T>(path: string) => req<T>('GET', path);

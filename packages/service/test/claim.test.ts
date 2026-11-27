@@ -1,9 +1,9 @@
 /** A Telegram user sharing the phone of a client imported from the old base takes that client over. */
 import { describe, expect, it } from 'vitest';
-import { balanceFromLedger, defaultRules, manualAdjust, parseRules } from '@honey/core';
+import { balanceFromLedger, RULES_V1_PLACEHOLDER, manualAdjust, parseRules } from '@honey/core';
 import { InMemoryRepository, isUnlinkedTelegramId, LoyaltyService, MemoryNotifier, PhoneTakenError, placeholderTelegramId } from '../src/index.js';
 
-const rules = parseRules({ ...defaultRules, welcomeBonus: 5_000 });
+const rules = parseRules({ ...RULES_V1_PLACEHOLDER, welcomeBonus: 5_000 });
 const now = new Date('2026-10-01T07:00:00Z');
 
 async function setup() {
@@ -70,5 +70,20 @@ describe('registerWithPhone claims an imported client', () => {
     await svc.registerWithPhone({ telegramId: 555, name: 'A', phone: '+998909999999', language: 'ru' });
     await expect(svc.registerWithPhone({ telegramId: 555, name: 'A', phone: '+998901234567', language: 'ru' })).rejects.toBeInstanceOf(PhoneTakenError);
     expect((await repo.findClientById(imported.id))!.telegramId).toBeLessThan(0);
+  });
+});
+
+describe('Л9: a card staff opened for a phone is claimable like an import', () => {
+  it('claim keeps the accruals and adds the welcome bonus; a second account cannot take it; the consent version is stored', async () => {
+    const repo = new InMemoryRepository({ rules });
+    const svc = new LoyaltyService(repo, new MemoryNotifier(), () => now, { retryDelayMs: 0 });
+    const phone = '+998935550011';
+    const card = await repo.createClient({ telegramId: placeholderTelegramId(phone), name: null, phone, language: 'ru', consentAt: null, createdAt: now, phoneCredit: { staffId: 's1' } });
+    await svc.execute(card.id, ({ rules: r, state, now: n }) => manualAdjust(r, state, { idempotencyKey: 'x', staffId: 's1', amount: 3_000, reason: 'покупка' }, n));
+    const res = await svc.registerWithPhone({ telegramId: 777, name: 'Анна', phone, language: 'ru', consentVersion: 'v1' });
+    expect(res).toMatchObject({ claimed: true, welcomeBonus: 5_000 });
+    expect(res.client).toMatchObject({ id: card.id, telegramId: 777, name: 'Анна', consentVersion: 'v1' });
+    expect(balanceFromLedger(repo.peekState(card.id)!.ledger)).toBe(8_000);
+    await expect(svc.registerWithPhone({ telegramId: 778, name: 'Борис', phone, language: 'ru' })).rejects.toBeInstanceOf(PhoneTakenError);
   });
 });

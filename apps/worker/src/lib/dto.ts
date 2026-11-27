@@ -16,6 +16,7 @@ import {
   dayNumberFromKey,
   deriveLevel,
   expiryInfo,
+  isBirthdayReward,
   isGrantedReward,
   keyFromDayNumber,
   rewardsForCycle,
@@ -36,6 +37,7 @@ export function levelInfo(t: LevelTier): LevelInfo {
 }
 
 export function publicRules(rules: LoyaltyRules): PublicRulesDTO {
+  const br = rules.birthdayReward;
   return {
     minPurchaseForCell: rules.honeycomb.minPurchaseForCell,
     maxRedeemPct: rules.maxRedeemPct,
@@ -43,6 +45,15 @@ export function publicRules(rules: LoyaltyRules): PublicRulesDTO {
     welcomeBonus: rules.welcomeBonus,
     levels: rules.levels.tiers.map(levelInfo),
     cells: rules.honeycomb.cells,
+    levelBy: rules.levels.criterion,
+    levelMode: rules.levels.mode,
+    levelWindowDays: rules.levels.windowDays,
+    levelResetDays: rules.levels.mode === 'sticky' ? rules.levels.resetAfterDays : null,
+    birthdayPct: br.enabled && br.type === 'discount_pct' ? br.value : 0,
+    birthdayDaysBefore: br.daysBefore,
+    birthdayDaysAfter: br.daysAfter,
+    allowDiscountWithPoints: rules.allowDiscountWithPoints,
+    cellGifts: giftLayout(rules.honeycomb.rewards),
   };
 }
 
@@ -56,6 +67,8 @@ export function giftDTO(r: Reward): GiftDTO {
     unlockedAt: r.unlockedAt.toISOString(),
     usedAt: r.usedAt ? r.usedAt.toISOString() : null,
     ...(isGrantedReward(r) ? { source: 'grant' as const, ...(r.grantReason ? { reason: r.grantReason } : {}) } : {}),
+    ...(isBirthdayReward(r) ? { source: 'birthday' as const } : {}),
+    ...(r.validUntil ? { validUntil: r.validUntil } : {}),
   };
 }
 
@@ -82,7 +95,14 @@ export function cardDTO(rules: LoyaltyRules, state: ClientState): CardDTO {
  * The client card as the client sees it. `history` comes from SQL (lib/history.ts), not from the
  * state: a bounded state (db/stateLoader.ts) carries only what the engine needs.
  */
-export function clientSummary(rules: LoyaltyRules, client: ClientProfile, stored: ClientState, now: Date, history: HistoryItemDTO[]): ClientSummaryDTO {
+export function clientSummary(
+  rules: LoyaltyRules,
+  client: ClientProfile,
+  stored: ClientState,
+  now: Date,
+  history: HistoryItemDTO[],
+  extra: { unclaimed?: boolean } = {},
+): ClientSummaryDTO {
   const state = viewState(rules, stored, now);
   const balance = balanceOf(state);
   const level = deriveLevel(rules, state, now);
@@ -99,6 +119,10 @@ export function clientSummary(rules: LoyaltyRules, client: ClientProfile, stored
     level: levelInfo(level.tier),
     next,
     card: cardDTO(rules, state),
+    levelBy: rules.levels.criterion,
+    levelKeptUntil: level.resetsOn ? keyFromDayNumber(dayNumberFromKey(level.resetsOn) - 1) : null,
+    birthday: client.birthday,
+    ...(extra.unclaimed ? { unclaimed: true } : {}),
     // exp.expiresOn is the day the points burn (engine); the client is told the last valid day.
     expiresOn: balance > 0 ? keyFromDayNumber(dayNumberFromKey(exp.expiresOn) - 1) : null,
     expiresAt: balance > 0 ? tashkentDayStartIso(exp.expiresOn) : null,

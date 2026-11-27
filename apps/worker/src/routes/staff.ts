@@ -1,4 +1,5 @@
 import type {
+  PhoneCreditDTO,
   PurchasePreviewDTO,
   PurchaseResultDTO,
   ReverseResultDTO,
@@ -18,7 +19,7 @@ import {
   type PurchaseInput,
   type PurchaseLine,
 } from '@honey/core';
-import { maskPhone, phoneDigits, type ClientProfile } from '@honey/service';
+import { maskPhone, normalizePhone, phoneDigits, PhoneTakenError, placeholderTelegramId, type ClientProfile } from '@honey/service';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { actingStaff, requireRole, STAFF_ROLES, type Caller, type Vars } from '../auth.js';
@@ -93,11 +94,64 @@ staffRoutes.get('/client', async (c) => {
     if (full.length === 1) exact = full[0]!;
     else if (matches.length === 1) exact = matches[0]!;
   }
+  // Л9: a full Uzbek number nobody has → the desk may open a card for it («Начислить на номер»).
+  const full = !exact && phone ? normalizePhone(phone) : null;
+  const phoneCandidate = full && /^\+998\d{9}$/.test(full) && !matches.some((m) => m.phone === full) ? full : null;
   const body: StaffClientLookupDTO = {
     client: exact ? await summaryFor(app, rules, exact.id, now) : null,
     matches: matches.map((m) => ({ id: m.id, name: m.name ?? '', phoneMasked: maskPhone(m.phone) })),
+    phoneCandidate,
   };
   return c.json(body);
+});
+
+/**
+ * POST /api/staff/client/by-phone { phone } — Л9: a card for a phone that has none yet (the client
+ * is not in the bot: most orders come by delivery). The card gets a placeholder Telegram id
+ * (−998XXXXXXXXX, like an import) and is CLAIMABLE: whoever shares this phone in the bot / Mini App
+ * takes it over with all accruals (+ the welcome bonus then). Nobody is messaged meanwhile.
+ * An existing card with this phone is returned as is (created = false).
+ */
+staffRoutes.post('/client/by-phone', async (c) => {
+  const app = c.get('app');
+  const caller = c.get('caller');
+  const body = z.object({ phone: z.string().min(9).max(30) }).parse(await c.req.json().catch(() => ({})));
+  const phone = normalizePhone(body.phone);
+  if (!phone || !/^\+998\d{9}$/.test(phone)) throw new HttpError(400, 'validation', 'Введите номер полностью: +998 XX XXX XX XX');
+  const now = app.now();
+  const { rules } = await app.repo.getActiveRules(now);
+  const existing = await app.repo.findClientByPhone(phone);
+  if (existing) {
+    const out: PhoneCreditDTO = { client: await summaryFor(app, rules, existing.id, now), created: false };
+    return c.json(out);
+  }
+  const staff = actingStaff(caller);
+  let client: ClientProfile;
+  try {
+    client = await app.repo.createClient({
+      telegramId: placeholderTelegramId(phone),
+      name: null,
+      phone,
+      language: 'ru',
+      consentAt: null,
+      createdAt: now,
+      phoneCredit: { staffId: staff.id },
+    });
+  } catch (e) {
+    // A parallel request (double tap, a colleague) created it a moment ago; or an import / demo row
+    // holds the same placeholder id: answer with whatever holds the phone now.
+    const again = await app.repo.findClientByPhone(phone);
+    if (!again) {
+      if (e instanceof PhoneTakenError || (e instanceof Error && /telegram_id/.test(e.message))) {
+        throw new HttpError(409, 'conflict', 'Этот номер уже занят другой записью — найдите клиента поиском');
+      }
+      throw e;
+    }
+    const out: PhoneCreditDTO = { client: await summaryFor(app, rules, again.id, now), created: false };
+    return c.json(out);
+  }
+  const out: PhoneCreditDTO = { client: await summaryFor(app, rules, client.id, now), created: true };
+  return c.json(out, 201);
 });
 
 // ------------------------------------------------------------ purchase
@@ -147,6 +201,8 @@ async function ensureClient(app: AppContext, clientId: string): Promise<ClientPr
   if (!client) throw new HttpError(404, 'not_found', 'Клиент не найден');
   return client;
 }
+
+export const STAFF_REVERSAL_OFF_MSG = 'Отменять покупки может только владелец — так настроено в правилах';
 
 export const SELF_OPERATION_MSG = 'Нельзя проводить покупку на свою карту — попросите коллегу';
 
@@ -226,6 +282,8 @@ staffRoutes.post('/purchase/:id/reverse', async (c) => {
   if (purchase.status === 'reversed') throw new HttpError(409, 'already_reversed', 'Эта покупка уже отменена');
   const staff = actingStaff(caller);
   const res = await app.service.execute(purchase.clientId, ({ rules, state, now }) => {
+    // Л8: the owner's switch «Сотрудники могут отменять покупки» (checked against the rules in force).
+    if (!rules.staffCanReverse && caller.role !== 'owner') throw new HttpError(403, 'forbidden', STAFF_REVERSAL_OFF_MSG);
     const current = state.purchases.find((p) => p.id === purchase.id);
     if (current?.status === 'reversed') throw new HttpError(409, 'already_reversed', 'Эта покупка уже отменена');
     return reversePurchase(rules, state, { purchaseId: purchase.id, reason, staffId: staff.id }, now);
@@ -261,6 +319,6 @@ staffRoutes.post('/gift/:id/use', async (c) => {
 // ------------------------------------------------------------ recent
 
 staffRoutes.get('/recent', async (c) => {
-  return c.json(await operationsFor(c.get('app'), 20));
+  return c.json(await operationsFor(c.get('app'), 20, c.get('caller').role));
 });
 

@@ -1,4 +1,4 @@
-import { defaultRules, type LoyaltyRules } from '@honey/core';
+import { RULES_V1_PLACEHOLDER, type LoyaltyRules } from '@honey/core';
 import { buildApp } from '../src/app.js';
 import { buildInitData, InMemoryRepository, MemoryNotifier } from '@honey/service';
 
@@ -16,7 +16,7 @@ export class Clock {
   readonly fn = () => this.now;
 }
 
-export function setup(rules: LoyaltyRules = defaultRules) {
+export function setup(rules: LoyaltyRules = RULES_V1_PLACEHOLDER) {
   const clock = new Clock(new Date('2026-11-01T10:00:00+05:00'));
   const repo = new InMemoryRepository({
     rules,

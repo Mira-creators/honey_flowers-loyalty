@@ -4,7 +4,10 @@
  * session (12 h). TEST_MODE: the Mini App's X-Test-User login works too.
  * Design: the Mini App themes (src/config/themes.ts CSS variables), desktop-first.
  */
+import '@fontsource/cormorant-garamond/600.css';
+import '@fontsource/cormorant-garamond/700.css';
 import './console.css';
+import '../ui/mascot.css';
 import type { EditableRulesDTO, WebMeDTO } from '@honey/contracts';
 import { ACTIVE_THEME, applyTheme, THEMES } from '../config/themes';
 import { getTestUser, setTestUser } from '../api';
@@ -16,6 +19,7 @@ import { cohortsView, loadCohorts } from './views/cohorts';
 import { importView, loadImport } from './views/importer';
 import { loadOps, opsView } from './views/operations';
 import { loadOverview, overviewView } from './views/overview';
+import { loadStock, stockView } from './views/stock';
 
 const root = document.getElementById('console')!;
 let me: WebMeDTO | null = null;
@@ -40,6 +44,7 @@ const VIEWS: Record<Section, { view: () => string; load: () => Promise<void>; ti
   ops: { view: opsView, load: () => loadOps(), title: 'Покупки и операции', period: true },
   cohorts: { view: cohortsView, load: () => loadCohorts(), title: 'Удержание клиентов', period: false },
   import: { view: importView, load: () => loadImport(), title: 'Импорт базы клиентов', period: false },
+  stock: { view: stockView, load: () => loadStock(), title: 'Склад', period: true },
 };
 
 function periodPicker(): string {
@@ -54,13 +59,15 @@ function periodPicker(): string {
 function mascot() {
   return `<svg viewBox="-34 -34 68 56" width="40" aria-hidden="true">${THEMES[themeId]!.mascot(1)}</svg>`;
 }
+/** The shop logo (public/brand), Brand «Клевер». */
+const logo = (size = 44) => `<img class="cx-logo" src="/brand/honey-logo.webp" alt="Honey Flowers" width="${size}" height="${size}">`;
 
 function layout(): string {
   const s = section();
   const v = VIEWS[s];
   return `<div class="cx">
     <aside class="cx-nav">
-      <div class="cx-brand">${mascot()}<div><b class="disp">Honey Flowers</b><div class="cx-mut">Кабинет владельца</div></div></div>
+      <div class="cx-brand">${logo()}<div><b class="disp">Honey Flowers</b><div class="cx-mut">Кабинет владельца</div></div></div>
       <nav>${SECTIONS.map(([k, l]) => `<a href="?${navQuery(k)}" data-act="nav" data-s="${k}" ${k === s ? 'aria-current="page"' : ''}>${l}</a>`).join('')}</nav>
       <div class="cx-who">${esc(me?.name ?? '')}${me?.via === 'testHeader' ? ' <span class="cx-tag">тест</span>' : ''}
         ${me?.sessionExpiresAt ? `<div class="cx-mut">вход до ${esc(new Date(me.sessionExpiresAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }))}</div>` : ''}

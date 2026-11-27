@@ -63,6 +63,28 @@ export const loyaltyRulesSchema = z
       criterion: z.enum(['sum', 'count']),
       /** null = all time; N = only purchases of the last N calendar months. */
       windowMonths: z.number().int().positive().nullable(),
+      /**
+       * null = no day window; N = only purchases of the last N LOCAL calendar days, today included
+       * (90 = "за последние 90 дней"). Mutually exclusive with windowMonths.
+       */
+      windowDays: z.number().int().positive().max(3650).nullable().default(null),
+      /**
+       * criterion 'count' only: at most ONE purchase per local calendar day counts ("все заказы за
+       * день — один заказ"). Requires a window (windowDays / windowMonths).
+       */
+      oncePerDay: z.boolean().default(false),
+      /**
+       * 'rolling' (the old behaviour): the level is always what the metric gives right now, so it can
+       *   drop as old purchases leave the window.
+       * 'sticky' (owner decision Л1): the level RISES at a purchase when the metric reaches a threshold
+       *   and never drops while the client keeps buying; after `resetAfterDays` local days without a
+       *   purchase it resets to the first tier. A separate timer from мёд expiry.
+       */
+      mode: z.enum(['rolling', 'sticky']).default('rolling'),
+      /** sticky: days without purchases after which the level resets to the first tier (required). */
+      resetAfterDays: z.number().int().positive().max(3650).nullable().default(null),
+      /** sticky: remind the client this many days before the level resets. */
+      resetWarnDays: z.array(z.number().int().positive()).default([]),
       /** Ascending by threshold; first tier has threshold 0. */
       tiers: z.array(levelTierSchema).min(1),
     }),
@@ -76,6 +98,11 @@ export const loyaltyRulesSchema = z
      * corrects a mistake at the till, it is not a refund). 1..720; rules stored before it existed get 24.
      */
     reversalWindowHours: z.number().int().min(1).max(720).default(24),
+    /**
+     * Owner switch «Сотрудники могут отменять покупки» (Л8). true: florists / managers and the owner
+     * may reverse (within reversalWindowHours); false: only the owner. Rules stored before it existed get true.
+     */
+    staffCanReverse: z.boolean().default(true),
     /** May a discount reward (discount_pct) be combined with points in one order? */
     allowDiscountWithPoints: z.boolean(),
     /** Points credited once at registration. 0 disables. */
@@ -112,13 +139,17 @@ export const loyaltyRulesSchema = z
       onExpiry: z.enum(['balance_only', 'balance_and_level_down', 'reset_all']),
     }),
 
-    /** STUB: not used by the engine yet (questionnaire Q16). */
+    /**
+     * Birthday gift (Л6, commands/birthday.ts): a gift appears `daysBefore` local days before the
+     * client's birthday and is valid until `daysAfter` days after it, once per year. 'discount_pct'
+     * (value = percent) and 'custom' (handed over) are supported; 'points' is reserved (not used).
+     */
     birthdayReward: z.object({
       enabled: z.boolean(),
       type: z.enum(['points', 'discount_pct', 'custom']),
       value: z.number().nonnegative(),
-      daysBefore: z.number().int().nonnegative(),
-      daysAfter: z.number().int().nonnegative(),
+      daysBefore: z.number().int().nonnegative().max(60),
+      daysAfter: z.number().int().nonnegative().max(60),
     }),
   })
   .superRefine((r, ctx) => {
@@ -133,6 +164,22 @@ export const loyaltyRulesSchema = z
     }
     if (new Set(tiers.map((t) => t.id)).size !== tiers.length) {
       ctx.addIssue({ code: 'custom', path: ['levels', 'tiers'], message: 'tier ids must be unique' });
+    }
+    const lv = r.levels;
+    if (lv.windowDays !== null && lv.windowMonths !== null) {
+      ctx.addIssue({ code: 'custom', path: ['levels', 'windowDays'], message: 'use either windowDays or windowMonths' });
+    }
+    if (lv.oncePerDay && lv.criterion === 'count' && lv.windowDays === null && lv.windowMonths === null) {
+      ctx.addIssue({ code: 'custom', path: ['levels', 'oncePerDay'], message: 'oncePerDay needs a level window (windowDays or windowMonths)' });
+    }
+    if (lv.mode === 'sticky' && lv.resetAfterDays === null) {
+      ctx.addIssue({ code: 'custom', path: ['levels', 'resetAfterDays'], message: 'sticky levels need resetAfterDays' });
+    }
+    if (lv.resetAfterDays !== null && lv.resetWarnDays.some((d) => d >= lv.resetAfterDays!)) {
+      ctx.addIssue({ code: 'custom', path: ['levels', 'resetWarnDays'], message: 'a reminder must come before the reset' });
+    }
+    if (r.birthdayReward.enabled && r.birthdayReward.type === 'discount_pct' && (r.birthdayReward.value <= 0 || r.birthdayReward.value > 100)) {
+      ctx.addIssue({ code: 'custom', path: ['birthdayReward', 'value'], message: 'birthday discount must be 0 < value <= 100' });
     }
     const checkRewards = (list: { cell: number }[], key: string) => {
       const seen = new Set<number>();

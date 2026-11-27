@@ -1,9 +1,9 @@
-import type { LoyaltyEvent, LoyaltyRules } from '@honey/core';
+import { dayNumberFromKey, keyFromDayNumber, type LoyaltyEvent, type LoyaltyRules } from '@honey/core';
 import { isUnlinkedTelegramId, type Notifier } from '@honey/service';
 import type { D1Repository, NotificationLogEntry } from '../db/d1Repository.js';
 import type { Env } from '../env.js';
 import { tgCall, webAppKeyboard } from './telegramApi.js';
-import { fmtDate, t } from './texts.js';
+import { fmtDate, levelTitle, t } from './texts.js';
 
 /**
  * Sends engine events to clients as Telegram messages (one message per client
@@ -68,7 +68,7 @@ export class TelegramNotifier implements Notifier {
 /** Human message for one client's events (null = nothing worth sending). */
 export function composeMessage(rules: LoyaltyRules, events: LoyaltyEvent[], lang: string): string | null {
   const T = t(lang);
-  const title = (id: string) => rules.levels.tiers.find((x) => x.id === id)?.title ?? id;
+  const title = (id: string) => levelTitle(rules.levels.tiers.find((x) => x.id === id)?.title ?? id, lang);
   const lines: string[] = [];
   for (const e of events) {
     switch (e.type) {
@@ -85,7 +85,14 @@ export function composeMessage(rules: LoyaltyRules, events: LoyaltyEvent[], lang
         lines.push(T.levelUp(title(e.to), e.cashbackPct));
         break;
       case 'level_down':
-        lines.push(T.levelDown(title(e.to)));
+        lines.push(e.reason === 'inactivity' ? T.levelReset(title(e.to), rules.levels.resetAfterDays ?? 90) : T.levelDown(title(e.to)));
+        break;
+      case 'level_reset_warning':
+        // The client is told the LAST day the level is kept (the reset day minus one).
+        lines.push(T.levelWarning(title(e.levelId), e.daysLeft, fmtDate(keyFromDayNumber(dayNumberFromKey(e.resetsOn) - 1))));
+        break;
+      case 'birthday_gift':
+        lines.push(T.birthdayGift(birthdayTitle(lang, e.title), fmtDate(e.validUntil)));
         break;
       case 'expiry_warning':
         lines.push(T.expiryWarning(e.daysLeft, e.balance, fmtDate(e.expiresOn)));
@@ -118,4 +125,10 @@ export function composeMessage(rules: LoyaltyRules, events: LoyaltyEvent[], lang
     }
   }
   return lines.length ? lines.join('\n') : null;
+}
+
+/** The birthday gift title is stored in Russian; Uzbek readers get a translation of the default one. */
+function birthdayTitle(lang: string, title: string): string {
+  const m = /^Скидка (\d+)% ко дню рождения$/.exec(title);
+  return lang === 'uz' && m ? `tug‘ilgan kunga ${m[1]}% chegirma` : title;
 }

@@ -8,10 +8,13 @@
     "build": "tsc --noEmit && vite build && vite build -c vite.console.config.ts",
     "typecheck": "tsc --noEmit",
     "e2e": "npm run build && node test/e2e.js",
-    "e2e:demo": "npm run build && node test/e2e-demo.js"
+    "e2e:demo": "npm run build && node test/e2e-demo.js",
+    "e2e:stock": "npm run build && node test/e2e-stock.js"
   },
   "dependencies": {
+    "@fontsource/cormorant-garamond": "5.3.0",
     "@honey/contracts": "0.1.0",
+    "@honey/stock": "0.1.0",
     "fflate": "0.8.2",
     "qrcode-generator": "1.4.4"
   },

@@ -13,7 +13,7 @@ import {
 } from '../state.js';
 import { localDateKey } from '../time.js';
 import type { CardMove, Channel, ClientState, PurchaseLine, PurchaseRecord, PurchaseSummary, Reward, Uzs } from '../types.js';
-import { assert, eligibleTotal, findAvailableReward, redeemCap, rewardEffect, validateLines } from './common.js';
+import { assert, assertRewardValid, eligibleTotal, findAvailableReward, redeemCap, rewardEffect, validateLines } from './common.js';
 import { settleExpiry } from './expiry.js';
 
 export interface PurchaseInput {
@@ -66,6 +66,7 @@ export function maxRedeemable(
   const reward = rewardIdToUse ? s.rewards.find((r) => r.id === rewardIdToUse) ?? null : null;
   if (reward?.type === 'discount_pct' && !rules.allowDiscountWithPoints) return 0;
   if (reward && reward.status !== 'available') return 0;
+  if (reward?.validUntil && localDateKey(now, rules.timezone) > reward.validUntil) return 0;
   const discount = rewardEffect(reward, lines, amount).discount;
   return Math.max(0, Math.min(balanceOf(s), redeemCap(rules, amount, discount)));
 }
@@ -114,6 +115,7 @@ export function applyPurchase(rules: LoyaltyRules, state: ClientState, input: Pu
   const redeem = input.redeemPoints ?? 0;
   assert(Number.isSafeInteger(redeem) && redeem >= 0, 'INVALID_INPUT', 'redeemPoints must be a non-negative integer');
   const reward = input.useRewardId ? findAvailableReward(s, input.useRewardId) : null;
+  if (reward) assertRewardValid(rules, reward, now);
   if (reward?.type === 'discount_pct' && redeem > 0 && !rules.allowDiscountWithPoints) {
     throw new LoyaltyError('DISCOUNT_WITH_POINTS_NOT_ALLOWED', 'discount gift and points cannot be combined');
   }
@@ -268,6 +270,7 @@ export function applyPurchase(rules: LoyaltyRules, state: ClientState, input: Pu
     cell,
     rewardsUnlocked: unlocked.map((r) => r.id),
     balanceAfter: balanceOf(after),
+    ...(rules.levels.mode === 'sticky' ? { stickyLevel: levelAfter.tier.id } : {}),
   };
   out.events = events;
   return mergeOutcomes(expiry, out);

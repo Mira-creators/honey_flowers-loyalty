@@ -23,17 +23,24 @@ export function fmtDate(key: string): string {
 
 /** Rules facts for /help (from the rules in force). */
 export interface HelpInfo {
-  levels: Array<{ title: string; pct: number }>;
-  minCell: number;
-  giftCells: number[];
-  maxRedeemPct: number;
-  expiryDays: number;
+  /** «Как работает» bullets from the rules in force (lib/legal.ts summaryBullets). */
+  bullets: string[];
   owner: boolean;
 }
 
 const ru = {
   greeting: (name: string) =>
-    `Здравствуйте, ${name}! 🌸\nЭто программа лояльности Honey Flowers «Медовые соты»: за каждую покупку — мёд (кешбэк) и шаг пчёлки по сотам с подарками.\n\n🇺🇿 Assalomu alaykum! Honey Flowers sodiqlik dasturiga xush kelibsiz.`,
+    `Здравствуйте, ${name}! 🌸\nЭто «Медовая карта» Honey Flowers: за каждую покупку — мёд (кешбэк) и шаг пчёлки по сотам с подарками.\n\n🇺🇿 Assalomu alaykum! Honey Flowers «Asal kartasi»ga xush kelibsiz.`,
+  // Д1: before the phone is shared
+  consentIntro: (bullets: string[], draft: boolean) =>
+    `🐝 Как работает Медовая карта\n\n${bullets.join('\n')}\n\n` +
+    `Прежде чем получить карту, пожалуйста, прочитайте «Правила программы» и «Согласие на обработку персональных данных» и нажмите «✅ Принимаю».` +
+    (draft ? '\n\n⚠️ Черновик текстов — требует проверки юристом.' : ''),
+  consentRulesButton: '📄 Правила программы',
+  consentDataButton: '🔒 Согласие на обработку данных',
+  consentAcceptButton: '✅ Принимаю',
+  consentAccepted: 'Спасибо! Теперь нажмите «📱 Поделиться номером» внизу экрана 👇',
+  consentNeeded: 'Чтобы получить карту, сначала примите правила программы и согласие на обработку данных 👇',
   askContact: 'Чтобы получить медовую карту, нажмите кнопку «📱 Поделиться номером» ниже 👇',
   contactButton: '📱 Поделиться номером',
   openCardButton: '🐝 Открыть медовую карту',
@@ -53,12 +60,7 @@ const ru = {
     `Номер карты: ${code}. Покажите QR из карты флористу при покупке.`,
   help: 'Команды:\n/card — открыть медовую карту\n/help — как копить мёд\n/lang — язык / til\n/start — начать заново',
   helpFull: (h: HelpInfo) =>
-    `🐝 Как работает «Медовые соты»\n\n` +
-    `🍯 Мёд — кешбэк с каждой покупки, 1 мёд = 1 сум. Уровни: ${h.levels.map((l) => `${l.title} ${l.pct}%`).join(' → ')}.\n` +
-    `🌸 Соты — покупка от ${fmt(h.minCell)} сум переносит пчёлку на следующую соту` +
-    (h.giftCells.length ? `; в сотах ${h.giftCells.join(', ')} ждут подарки-сюрпризы.\n` : '.\n') +
-    `💳 Мёдом можно оплатить до ${h.maxRedeemPct}% заказа.\n` +
-    `⏳ Мёд сгорает, если ${h.expiryDays} ${plural(h.expiryDays, ['день', 'дня', 'дней'])} не было покупок, — мы напомним заранее.\n\n` +
+    `🐝 Как работает «Медовая карта»\n\n${h.bullets.join('\n')}\n\n` +
     `Команды:\n/card — открыть медовую карту\n/lang — язык / til\n/help — эта подсказка` +
     (h.owner ? '\n/stats — сводка для владельца' : ''),
   helpButton: '🍯 Как копить мёд',
@@ -76,6 +78,11 @@ const ru = {
   giftUnlocked: (title: string) => `🎁 Открыт подарок: ${title}! Он ждёт вас в разделе «Подарки».`,
   levelUp: (title: string, pct: number) => `👑 Новый уровень: ${title}! Кешбэк ${pct}% со следующей покупки.`,
   levelDown: (title: string) => `Уровень изменён: ${title}.`,
+  levelReset: (title: string, days: number) =>
+    `🐝 Уровень сброшен до «${title}»: ${days} ${plural(days, ['день', 'дня', 'дней'])} не было покупок. Мёд на карте сохранился, а новые покупки снова поднимут уровень.`,
+  levelWarning: (title: string, days: number, date: string) =>
+    `👑 Ваш уровень «${title}» сохранится до ${date}. Сделайте покупку до этой даты — и уровень останется с вами` + (days > 1 ? ` (осталось ${days} ${plural(days, ['день', 'дня', 'дней'])}).` : ' (остался 1 день).'),
+  birthdayGift: (title: string, until: string) => `🎂 С наступающим днём рождения! Ваш подарок: ${title}. Он действует до ${until} включительно и ждёт вас в разделе «Подарки».`,
   expiryWarning: (days: number, balance: number, date: string) =>
     `⏳ Через ${days} ${plural(days, ['день', 'дня', 'дней'])} сгорит ${fmt(balance)} мёда. Загляните к нам до ${date} — любая покупка сохранит мёд.`,
   expired: (amount: number, days: number) => `🥀 Сгорело ${fmt(amount)} мёда: не было покупок ${days} ${plural(days, ['день', 'дня', 'дней'])}.`,
@@ -90,6 +97,15 @@ const ru = {
 
 const uz: typeof ru = {
   greeting: ru.greeting,
+  consentIntro: (bullets, draft) =>
+    `🐝 Asal kartasi qanday ishlaydi\n\n${bullets.join('\n')}\n\n` +
+    `Karta olishdan oldin «Dastur qoidalari» va «Shaxsiy ma’lumotlarni qayta ishlashga rozilik»ni o‘qing va «✅ Qabul qilaman» tugmasini bosing.` +
+    (draft ? '\n\n⚠️ Matnlar qoralama — yurist tekshiruvi kerak.' : ''),
+  consentRulesButton: '📄 Dastur qoidalari',
+  consentDataButton: '🔒 Ma’lumotlarga rozilik',
+  consentAcceptButton: '✅ Qabul qilaman',
+  consentAccepted: 'Rahmat! Endi pastdagi «📱 Raqamni ulashish» tugmasini bosing 👇',
+  consentNeeded: 'Karta olish uchun avval dastur qoidalari va ma’lumotlarga rozilikni qabul qiling 👇',
   askContact: 'Asal kartasini olish uchun pastdagi «📱 Raqamni ulashish» tugmasini bosing 👇',
   contactButton: '📱 Raqamni ulashish',
   openCardButton: '🐝 Asal kartasini ochish',
@@ -109,12 +125,7 @@ const uz: typeof ru = {
     `Karta raqami: ${code}. Xarid paytida kartadagi QR kodni floristga koʻrsating.`,
   help: 'Buyruqlar:\n/card — asal kartasini ochish\n/help — asal qanday yig‘iladi\n/lang — til / язык\n/start — boshidan boshlash',
   helpFull: (h) =>
-    `🐝 «Asal kataklari» qanday ishlaydi\n\n` +
-    `🍯 Asal — har bir xariddan keshbek, 1 asal = 1 so‘m. Darajalar: ${h.levels.map((l) => `${l.title} ${l.pct}%`).join(' → ')}.\n` +
-    `🌸 Kataklar — ${fmt(h.minCell)} so‘mdan boshlab har bir xarid asalarini keyingi katakka olib o‘tadi` +
-    (h.giftCells.length ? `; ${h.giftCells.join(', ')}-kataklarda syurpriz sovg‘alar bor.\n` : '.\n') +
-    `💳 Buyurtmaning ${h.maxRedeemPct}% gacha qismini asal bilan to‘lash mumkin.\n` +
-    `⏳ ${h.expiryDays} kun davomida xarid bo‘lmasa, asal kuyadi — oldindan eslatamiz.\n\n` +
+    `🐝 «Asal kartasi» qanday ishlaydi\n\n${h.bullets.join('\n')}\n\n` +
     `Buyruqlar:\n/card — asal kartasini ochish\n/lang — til / язык\n/help — shu yordam` +
     (h.owner ? '\n/stats — egasi uchun hisobot' : ''),
   helpButton: '🍯 Asal qanday yig‘iladi',
@@ -131,6 +142,9 @@ const uz: typeof ru = {
   giftUnlocked: (title) => `🎁 Sovg‘a ochildi: ${title}! U «Sovg‘alar» bo‘limida sizni kutmoqda.`,
   levelUp: (title, pct) => `👑 Yangi daraja: ${title}! Keyingi xariddan ${pct}% keshbek.`,
   levelDown: (title) => `Daraja o‘zgardi: ${title}.`,
+  levelReset: (title, days) => `🐝 Daraja «${title}»ga tushdi: ${days} kun davomida xarid bo‘lmadi. Asal saqlanib qoldi, yangi xaridlar darajani yana ko‘taradi.`,
+  levelWarning: (title, days, date) => `👑 «${title}» darajangiz ${date} gacha saqlanadi. Shu sanagacha xarid qiling — daraja sizda qoladi (${days} kun qoldi).`,
+  birthdayGift: (title, until) => `🎂 Tug‘ilgan kuningiz bilan! Sovg‘angiz: ${title}. U ${until} gacha amal qiladi va «Sovg‘alar» bo‘limida sizni kutmoqda.`,
   expiryWarning: (days, balance, date) =>
     `⏳ ${days} kundan keyin ${fmt(balance)} asal kuyib ketadi. ${date} gacha keling — har qanday xarid asalni saqlab qoladi.`,
   expired: (amount, days) => `🥀 ${fmt(amount)} asal kuydi: ${days} kun davomida xarid bo‘lmadi.`,
@@ -143,6 +157,20 @@ const uz: typeof ru = {
 };
 
 export const TEXTS: Record<BotLang, typeof ru> = { ru, uz };
+
+/**
+ * Level names (Л12). The owner may rename levels in «Правила» (then the name is shown as written);
+ * the default Russian names have Uzbek (Latin) and English equivalents.
+ */
+export const LEVEL_NAMES: Record<string, { uz: string; en: string }> = {
+  Пчёлка: { uz: 'Asalari', en: 'Bee' },
+  'Королева улья': { uz: 'Ari malikasi', en: 'Queen Bee' },
+  'Золотой мёд': { uz: 'Oltin asal', en: 'Golden Honey' },
+};
+export function levelTitle(ruTitle: string, lang: string | null | undefined): string {
+  const tr = LEVEL_NAMES[ruTitle];
+  return tr && (lang === 'uz' || lang === 'en') ? tr[lang] : ruTitle;
+}
 
 export function t(lang: string | null | undefined) {
   return TEXTS[asLang(lang)];

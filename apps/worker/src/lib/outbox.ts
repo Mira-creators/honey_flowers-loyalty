@@ -54,12 +54,16 @@ function permanent(e: unknown): boolean {
 export function freshEvents(events: LoyaltyEvent[], today: string): LoyaltyEvent[] {
   const out: LoyaltyEvent[] = [];
   for (const e of events) {
-    if (e.type !== 'expiry_warning') {
-      out.push(e);
-      continue;
-    }
-    const daysLeft = dayNumberFromKey(e.expiresOn) - dayNumberFromKey(today);
-    if (daysLeft > 0) out.push({ ...e, daysLeft });
+    if (e.type === 'expiry_warning') {
+      const daysLeft = dayNumberFromKey(e.expiresOn) - dayNumberFromKey(today);
+      if (daysLeft > 0) out.push({ ...e, daysLeft });
+    } else if (e.type === 'level_reset_warning') {
+      // Same for the level: the reset itself has its own message.
+      const daysLeft = dayNumberFromKey(e.resetsOn) - dayNumberFromKey(today);
+      if (daysLeft > 0) out.push({ ...e, daysLeft });
+    } else if (e.type === 'birthday_gift') {
+      if (e.validUntil >= today) out.push(e);
+    } else out.push(e);
   }
   return out;
 }

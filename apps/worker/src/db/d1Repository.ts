@@ -191,6 +191,7 @@ function clientFromRow(r: Row): ClientProfile {
     birthday: str(r.birthday),
     language: String(r.language ?? 'ru'),
     consentAt: dateOrNull(r.consent_at),
+    consentVersion: str(r.consent_version),
     createdAt: date(r.created_at),
     ...(num(r.demo ?? 0) === 1 ? { demo: true } : {}),
   };
@@ -277,6 +278,7 @@ function rewardFromRow(r: Row): Reward {
     unlockedAt: date(r.unlocked_at),
     usedAt: dateOrNull(r.used_at),
     ...(r.granted_by !== null && r.granted_by !== undefined ? { grantedBy: String(r.granted_by), grantReason: str(r.grant_reason) } : {}),
+    ...(r.valid_until !== null && r.valid_until !== undefined ? { validUntil: String(r.valid_until) } : {}),
   };
 }
 
@@ -296,6 +298,12 @@ function isVersionConflict(e: unknown): boolean {
   const msg = e instanceof Error ? `${e.message} ${String((e as { cause?: unknown }).cause ?? '')}` : String(e);
   return msg.includes('client_versions') || msg.includes('stale client version');
 }
+
+/** «Склад» tables in FK-safe delete order (TEST_MODE wipe). */
+export const STOCK_TABLES = [
+  'stock_sale_lines', 'stock_sales', 'stock_bouquets', 'stock_moves', 'stock_daily', 'stock_doc_lines', 'stock_lots', 'stock_docs',
+  'stock_templates', 'stock_item_balances', 'stock_items', 'stock_suppliers', 'stock_audit_log',
+];
 
 export class D1Repository implements Repository {
   private rulesCache: RulesVersion | null = null;
@@ -540,13 +548,17 @@ export class D1Repository implements Repository {
         await this.db.batch([
           this.db
             .prepare(
-              `INSERT INTO clients (id, telegram_id, code, phone, name, language, consent_at, created_at, next_check_on)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              `INSERT INTO clients (id, telegram_id, code, phone, name, language, consent_at, consent_version, created_at, next_check_on)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             )
-            .bind(id, input.telegramId, code, input.phone, input.name, input.language === 'uz' ? 'uz' : 'ru', isoOrNull(input.consentAt), iso(input.createdAt), nextCheck),
+            .bind(id, input.telegramId, code, input.phone, input.name, input.language === 'uz' ? 'uz' : 'ru', isoOrNull(input.consentAt), input.consentVersion ?? null, iso(input.createdAt), nextCheck),
           this.statsUpsertStmt(id, stats, input.createdAt),
           // stats_daily (migration 0007): a client registered through Telegram is "new" on that day.
           addStmt(this.db, tashkentDay(input.createdAt), { new_clients: 1 })!,
+          // Л9: a card staff opened for a phone without a card is claimable (migration 0011).
+          ...(input.phoneCredit
+            ? [this.db.prepare('INSERT INTO phone_credits (client_id, phone, created_by, created_at) VALUES (?, ?, ?, ?)').bind(id, input.phone, input.phoneCredit.staffId, iso(input.createdAt))]
+            : []),
         ]);
         return (await this.findClientById(id))!;
       } catch (e) {
@@ -562,7 +574,7 @@ export class D1Repository implements Repository {
 
   async updateClient(
     id: string,
-    patch: Partial<Pick<ClientProfile, 'name' | 'phone' | 'language' | 'consentAt' | 'birthday'>>,
+    patch: Partial<Pick<ClientProfile, 'name' | 'phone' | 'language' | 'consentAt' | 'consentVersion' | 'birthday'>>,
   ): Promise<ClientProfile> {
     const sets: string[] = [];
     const vals: unknown[] = [];
@@ -574,6 +586,7 @@ export class D1Repository implements Repository {
     if (patch.phone !== undefined) add('phone', patch.phone);
     if (patch.language !== undefined) add('language', patch.language);
     if (patch.consentAt !== undefined) add('consent_at', isoOrNull(patch.consentAt));
+    if (patch.consentVersion !== undefined) add('consent_version', patch.consentVersion);
     if (patch.birthday !== undefined) add('birthday', patch.birthday);
     if (sets.length) {
       try {
@@ -596,24 +609,65 @@ export class D1Repository implements Repository {
   async claimClient(
     clientId: string,
     placeholderTelegramId: number,
-    patch: { telegramId: number; name: string | null; language: string; consentAt: Date },
+    patch: { telegramId: number; name: string | null; language: string; consentAt: Date; consentVersion?: string | null },
   ): Promise<ClientProfile | null> {
     try {
-      const r = await this.db
-        .prepare(
-          `UPDATE clients SET telegram_id = ?1, name = COALESCE(name, ?2), language = ?3, consent_at = COALESCE(consent_at, ?4)
-           WHERE id = ?5 AND telegram_id = ?6 AND telegram_id < 0
-             AND demo = 0                                                              -- never a demo client (also negative ids)
-             AND EXISTS (SELECT 1 FROM client_imports i WHERE i.client_id = clients.id) -- only a client created by a base import
-           RETURNING *`,
-        )
-        .bind(patch.telegramId, patch.name, patch.language === 'uz' ? 'uz' : 'ru', iso(patch.consentAt), clientId, placeholderTelegramId)
-        .first<Row>();
+      const [upd] = await this.db.batch<Row>([
+        this.db
+          .prepare(
+            `UPDATE clients SET telegram_id = ?1, name = COALESCE(name, ?2), language = ?3, consent_at = COALESCE(consent_at, ?4),
+               consent_version = COALESCE(?7, consent_version)
+             WHERE id = ?5 AND telegram_id = ?6 AND telegram_id < 0
+               AND demo = 0                                                              -- never a demo client (also negative ids)
+               AND (EXISTS (SELECT 1 FROM client_imports i WHERE i.client_id = clients.id) -- a client created by a base import
+                    OR EXISTS (SELECT 1 FROM phone_credits p WHERE p.client_id = clients.id AND p.claimed_at IS NULL)) -- or by staff for a phone (Л9)
+             RETURNING *`,
+          )
+          .bind(patch.telegramId, patch.name, patch.language === 'uz' ? 'uz' : 'ru', iso(patch.consentAt), clientId, placeholderTelegramId, patch.consentVersion ?? null),
+        // Only if the update above took the card (the client row now carries the real id).
+        this.db
+          .prepare('UPDATE phone_credits SET claimed_at = ?1 WHERE client_id = ?2 AND claimed_at IS NULL AND EXISTS (SELECT 1 FROM clients c WHERE c.id = ?2 AND c.telegram_id = ?3)')
+          .bind(iso(patch.consentAt), clientId, patch.telegramId),
+      ]);
+      const r = upd!.results[0];
       return r ? clientFromRow(r) : null;
     } catch (e) {
       if (isUniqueViolation(e, 'clients.telegram_id')) return null; // this Telegram account got its own card meanwhile
       throw e;
     }
+  }
+
+  /** Л6: the client sets the birthday once — only while it is still empty (atomic). */
+  async setBirthdayOnce(clientId: string, birthday: string): Promise<boolean> {
+    const r = await this.db.prepare('UPDATE clients SET birthday = ?1 WHERE id = ?2 AND birthday IS NULL').bind(birthday, clientId).run();
+    return (r.meta.changes ?? 0) > 0;
+  }
+
+  /** Л9: was this client created by staff for a phone (and not claimed yet)? */
+  async isUnclaimedPhoneCredit(clientId: string): Promise<boolean> {
+    return !!(await this.db.prepare('SELECT 1 AS x FROM phone_credits WHERE client_id = ? AND claimed_at IS NULL').bind(clientId).first());
+  }
+
+  // ---------------------------------------------------------------- consent (Д1, migration 0011)
+
+  /** Consent given BEFORE registration (bot / Mini App onboarding), kept per Telegram user. */
+  async setTgConsent(telegramId: number, version: string, now: Date): Promise<void> {
+    await this.db.batch([
+      this.db
+        .prepare(
+          `INSERT INTO tg_users (telegram_id, first_name, username, language, first_seen_at, last_seen_at, consent_version, consent_at)
+           VALUES (?1, NULL, NULL, 'ru', ?2, ?2, ?3, ?2)
+           ON CONFLICT(telegram_id) DO UPDATE SET consent_version = excluded.consent_version, consent_at = excluded.consent_at`,
+        )
+        .bind(telegramId, iso(now), version),
+      // An existing client (asked once on the next open) accepts the same texts.
+      this.db.prepare('UPDATE clients SET consent_version = ?1, consent_at = ?2 WHERE telegram_id = ?3').bind(version, iso(now), telegramId),
+    ]);
+  }
+
+  async getTgConsent(telegramId: number): Promise<{ version: string; at: Date } | null> {
+    const r = await this.db.prepare('SELECT consent_version, consent_at FROM tg_users WHERE telegram_id = ?').bind(telegramId).first<Row>();
+    return r && r.consent_version ? { version: String(r.consent_version), at: date(r.consent_at) } : null;
   }
 
   /** TEST_MODE: remove a client with all its facts (ledger delete guard lifted inside the batch). */
@@ -633,6 +687,7 @@ export class D1Repository implements Repository {
       this.db.prepare('DELETE FROM important_dates WHERE client_id = ?').bind(id),
       this.db.prepare('DELETE FROM client_versions WHERE client_id = ?').bind(id),
       this.db.prepare('DELETE FROM client_imports WHERE client_id = ?').bind(id),
+      this.db.prepare('DELETE FROM phone_credits WHERE client_id = ?').bind(id),
       this.db.prepare('DELETE FROM client_stats WHERE client_id = ?').bind(id),
       this.db.prepare('DELETE FROM clients WHERE id = ?').bind(id),
       this.db.prepare(`DELETE FROM maintenance WHERE flag = 'allow_ledger_delete'`),
@@ -766,7 +821,7 @@ export class D1Repository implements Repository {
 
   private stateStatements(clientId: string): D1PreparedStatement[] {
     return [
-      this.db.prepare('SELECT created_at, level_override, level_override_at, level_override_index FROM clients WHERE id = ?').bind(clientId),
+      this.db.prepare('SELECT created_at, birthday, level_override, level_override_at, level_override_index FROM clients WHERE id = ?').bind(clientId),
       this.db.prepare('SELECT COALESCE(MAX(version), 0) AS v FROM client_versions WHERE client_id = ?').bind(clientId),
       this.db.prepare('SELECT * FROM purchases WHERE client_id = ? ORDER BY created_at, rowid').bind(clientId),
       this.db.prepare('SELECT * FROM points_ledger WHERE client_id = ? ORDER BY rowid').bind(clientId),
@@ -794,6 +849,7 @@ export class D1Repository implements Repository {
       clientId,
       registeredAt: date(c.created_at),
       levelOverride: overrideFromRow(c),
+      birthday: str(c.birthday),
       purchases: purchases!.results.map(purchaseFromRow),
       ledger: ledger!.results.map(ledgerFromRow),
       cardMoves: moves!.results.map(moveFromRow),
@@ -872,7 +928,7 @@ export class D1Repository implements Repository {
     const json = JSON.stringify(ids);
     const ph = 'SELECT value FROM json_each(?1)';
     const [clients, versions, purchases, ledger, moves, rewards, keys] = await this.db.batch<Row>([
-      this.db.prepare(`SELECT id, created_at, level_override, level_override_at, level_override_index FROM clients WHERE id IN (${ph})`).bind(json),
+      this.db.prepare(`SELECT id, created_at, birthday, level_override, level_override_at, level_override_index FROM clients WHERE id IN (${ph})`).bind(json),
       this.db.prepare(`SELECT client_id, MAX(version) AS v FROM client_versions WHERE client_id IN (${ph}) GROUP BY client_id`).bind(json),
       this.db.prepare(`SELECT * FROM purchases WHERE client_id IN (${ph}) ORDER BY created_at, rowid`).bind(json),
       this.db.prepare(`SELECT * FROM points_ledger WHERE client_id IN (${ph}) ORDER BY rowid`).bind(json),
@@ -888,6 +944,7 @@ export class D1Repository implements Repository {
           clientId: id,
           registeredAt: date(c.created_at),
           levelOverride: overrideFromRow(c),
+          birthday: str(c.birthday),
           purchases: [],
           ledger: [],
           cardMoves: [],
@@ -1041,8 +1098,8 @@ export class D1Repository implements Repository {
     return this.db
       .prepare(
         `INSERT INTO rewards (id, client_id, cycle, cell, type, value, title, status, unlocked_by_purchase, used_in_purchase,
-           used_idempotency_key, unlocked_at, used_at, granted_by, grant_reason)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           used_idempotency_key, unlocked_at, used_at, granted_by, grant_reason, valid_until)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .bind(
         r.id,
@@ -1060,6 +1117,7 @@ export class D1Repository implements Repository {
         isoOrNull(r.usedAt),
         r.grantedBy ?? null,
         r.grantReason ?? null,
+        r.validUntil ?? null,
       );
   }
 
@@ -1121,9 +1179,12 @@ export class D1Repository implements Repository {
 
   /** New rules version: recompute level_id (from spent / override) and expires_on (from activity_at) in SQL. */
   private statsRulesStmts(rules: LoyaltyRules): D1PreparedStatement[] {
+    // Sticky levels keep the level reached (if its tier still exists); the engine heals the rest on the
+    // next write / card open / daily job.
     const level = `(SELECT json_extract(t.value, '$.id') FROM json_each(?1, '$.levels.tiers') t
         WHERE CAST(json_extract(t.value, '$.threshold') AS INTEGER) <= client_stats.spent
            OR json_extract(t.value, '$.id') = (SELECT level_override FROM clients WHERE id = client_stats.client_id)
+           OR (json_extract(?1, '$.levels.mode') = 'sticky' AND json_extract(t.value, '$.id') = client_stats.level_id)
         ORDER BY CAST(json_extract(t.value, '$.threshold') AS INTEGER) DESC LIMIT 1)`;
     const exp = `date(activity_at, '+5 hours', '+' || (?1 - 1) || ' days')`;
     return [
@@ -1402,9 +1463,13 @@ export class D1Repository implements Repository {
   async wipeAll(): Promise<void> {
     await this.db.batch([
       this.db.prepare(`INSERT OR IGNORE INTO maintenance (flag) VALUES ('allow_ledger_delete')`),
+      // «Склад» (migrations 0012–0014): its own maintenance flag lifts the append-only guards.
+      this.db.prepare(`INSERT OR IGNORE INTO maintenance (flag) VALUES ('allow_stock_delete')`),
+      ...STOCK_TABLES.map((t) => this.db.prepare(`DELETE FROM ${t}`)),
+      this.db.prepare(`DELETE FROM maintenance WHERE flag = 'allow_stock_delete'`),
       ...[
         'points_ledger', 'card_moves', 'rewards', 'purchases', 'client_versions', 'notification_keys',
-        'notifications_log', 'outbox', 'important_dates', 'client_stats', 'export_links', 'client_imports', 'import_updates', 'clients', 'staff', 'test_roles', 'tg_users',
+        'notifications_log', 'outbox', 'important_dates', 'client_stats', 'export_links', 'client_imports', 'import_updates', 'phone_credits', 'clients', 'staff', 'test_roles', 'tg_users',
         'system_events', 'cron_runs', 'import_batches', 'web_link_tokens', 'web_session_versions', 'stats_daily', 'stats_buyers',
       ].map((t) => this.db.prepare(`DELETE FROM ${t}`)),
       this.db.prepare('DELETE FROM rules_versions WHERE id <> 1'),
