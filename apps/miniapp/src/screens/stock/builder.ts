@@ -10,6 +10,7 @@ import { tg } from '../../tg';
 import { newIdempotencyKey } from '../../api';
 import { closeLayer, esc, fmt, sheet, toast } from '../../ui/dom';
 import { sapi, StockErr } from './sapi';
+import { refreshSalePreview } from './sell'; // used at call time only (sell imports this module too)
 import { builderCost, itemById, loadCatalog, money, pctTxt, qtyText, render, resetBuilder, resetSell, ST, tile } from './st';
 
 export async function openBuilder() {
@@ -78,7 +79,7 @@ export function builderView(): string {
       ${lastUndo ? `<button class="link st-undo" data-act="stUndo">↶ Отменить: ${esc(lastUndo.label)}</button>` : ''}
       <div class="st-row"><span>Себестоимость</span><b id="stCost">${money(cost.cost.costUzs)}</b></div>
       <div class="st-row"><span>Рекомендуем</span><b>${money(cost.suggested)}</b></div>
-      <div class="st-row"><label for="stPrice">Цена</label><span class="st-price"><input id="stPrice" data-input="stPrice" inputmode="numeric" value="${esc(b.priceEdited ? b.price : String(cost.suggested || ''))}" ${pricing.priceMode === 'fixed' ? 'disabled' : ''}><small>маржа ${fmt(cost.price - cost.cost.costUzs)}</small></span></div>
+      <div class="st-row"><label for="stPrice">Цена</label><span class="st-price"><input id="stPrice" data-input="stPrice" inputmode="numeric" maxlength="9" value="${esc(b.priceEdited ? b.price : '')}" placeholder="${esc(cost.suggested ? fmt(cost.suggested) : '')}" aria-label="Цена букета, по умолчанию рекомендованная" ${pricing.priceMode === 'fixed' ? 'disabled' : ''}><small>маржа ${fmt(cost.price - cost.cost.costUzs)}</small></span></div>
       ${bar('Себест.', cost.costShare, pricing.targets.costShare, cost.costLevel)}
       ${bar('Цветы', cost.flowersShare, pricing.targets.flowersShare, cost.flowersLevel)}
       ${shortNote}
@@ -235,6 +236,7 @@ async function doAssemble(allowShort = false, comment = '') {
     if (res.bouquet.kind === 'order') {
       resetSell([res.bouquet]);
       ST.screen = 'sell';
+      refreshSalePreview(); // without a client nothing else asks for the totals: «Считаем…» forever (audit UI-2)
       if (ST.ftab !== 'desk') ST.ftab = 'showcase';
       toast(`Букет №${res.bouquet.number} собран · себестоимость ${fmt(res.bouquet.cost)}`, 'ok');
     } else toast(`Букет №${res.bouquet.number} на витрине`, 'ok');

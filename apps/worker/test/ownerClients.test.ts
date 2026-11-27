@@ -185,7 +185,8 @@ describe('client_stats stays consistent with the ledger', () => {
           // item 8: refused (409) when the purchase's мёд was spent; the window is 720 h here
           expect([200, 409]).toContain((await call(`/api/staff/purchase/${pid}/reverse`, { user: FLORIST, body: { reason: 'тест отмены' } })).status);
         } else if (r < 0.8) {
-          expect((await adjust(id, rnd() < 0.7 ? 3000 : -1000, 'перенос базы')).status).toBe(200);
+          // a correction never takes the balance below zero (audit UI-3): 422 when it would
+          expect([200, 422]).toContain((await adjust(id, rnd() < 0.7 ? 3000 : -1000, 'перенос базы')).status);
         } else {
           const card = await json<OwnerClientDTO>(call(`/api/owner/clients/${id}`, { user: OWNER }));
           const gift = card.gifts.find((g) => g.status === 'available');
@@ -258,15 +259,18 @@ describe('client card, adjustment, note', () => {
     expect((await adjust(id, 100_000_001, 'слишком много')).status).toBe(400);
     expect((await adjust('nope', 100, 'нет клиента')).status).toBe(404);
 
-    const neg = await json<AdjustResultDTO>(adjust(id, -1500, 'Ошибка кассы'));
-    expect(neg.client.balance).toBe(-500);
-    expect(neg.warnings.join(' ')).toMatch(/отрицательн/);
+    // audit UI-3: never below zero — refused with the current balance in the message, nothing changes
+    const neg = await adjust(id, -1500, 'Ошибка кассы');
+    expect(neg.status).toBe(422);
+    expect(((await neg.json()) as { error: { message: string } }).error.message).toMatch(/не может уйти в минус: сейчас на карте 1\s000/);
+    const ok = await json<AdjustResultDTO>(adjust(id, -1000, 'Ошибка кассы'));
+    expect(ok.client.balance).toBe(0);
 
     const once = { points: 200, reason: 'Акция', idempotencyKey: 'adjust-key-1' };
     const r1 = await json<AdjustResultDTO>(call(`/api/owner/clients/${id}/adjust`, { user: OWNER, body: once }));
     const r2 = await json<AdjustResultDTO>(call(`/api/owner/clients/${id}/adjust`, { user: OWNER, body: once }));
     expect([r1.replayed, r2.replayed]).toEqual([false, true]);
-    expect(r2.client.balance).toBe(-300);
+    expect(r2.client.balance).toBe(200);
   });
 
   it('note: saved, shown on the card and in the list export, <= 500 chars, empty clears', async () => {

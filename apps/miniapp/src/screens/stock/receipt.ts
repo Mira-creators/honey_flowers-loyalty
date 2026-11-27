@@ -97,7 +97,10 @@ changes.stRecItem = (el) => {
   if (!l) return;
   l.itemId = el.value;
   const it = ST.catalog?.items.find((i) => i.id === el.value);
-  if (it?.unit.pack) { l.unit = 'pack'; l.per = 'pack'; } else { l.unit = 'base'; l.per = 'unit'; }
+  // packs by default only for an empty line: a quantity typed before choosing the sort is pieces,
+  // it must not silently become packs (100 → 2 500 roses, audit UI-6)
+  if (it?.unit.pack && !l.qty.trim()) { l.unit = 'pack'; l.per = 'pack'; }
+  else if (!it?.unit.pack || l.unit === 'pack') { l.unit = 'base'; l.per = 'unit'; }
   edited(true);
 };
 changes.stRecUnit = (el) => { const l = ST.receipt.lines[k(el)]; if (l) { l.unit = el.value as 'base' | 'pack'; edited(true); } };

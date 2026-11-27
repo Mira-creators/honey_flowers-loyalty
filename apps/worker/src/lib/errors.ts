@@ -52,6 +52,9 @@ export function toApiError(err: unknown): { status: number; body: ApiError } {
     if (err.code === 'REVERSAL_WINDOW_EXPIRED' || err.code === 'REVERSAL_GIFT_USED' || err.code === 'REVERSAL_POINTS_SPENT') {
       return { status: 409, body: body('conflict', reversalBlockMessage(err.code, err.data.hours)) };
     }
+    if (err.code === 'INSUFFICIENT_BALANCE' && err.data.balance !== undefined) {
+      return { status: 422, body: body('insufficient_points', `Баланс не может уйти в минус: сейчас на карте ${err.data.balance.toLocaleString('ru-RU')} мёда`) };
+    }
     const m = LOYALTY_MAP[err.code];
     // Keep the engine detail (e.g. "at most 25000 points") after the Russian text.
     return { status: m.status, body: body(m.code, `${m.message} (${err.message})`) };
@@ -64,9 +67,25 @@ export function toApiError(err: unknown): { status: number; body: ApiError } {
   if (err instanceof ZodError) {
     const first = err.issues[0];
     const where = first?.path.length ? `${first.path.join('.')}: ` : '';
-    return { status: 400, body: body('validation', `Неверные данные: ${where}${first?.message ?? ''}`) };
+    return { status: 400, body: body('validation', `Неверные данные: ${where}${ruZod(first?.message ?? '')}`) };
   }
   if (err instanceof SyntaxError) return { status: 400, body: body('validation', 'Тело запроса не JSON') };
   console.error('internal error', err);
   return { status: 500, body: body('internal', 'Внутренняя ошибка сервера') };
+}
+
+/** Zod's English defaults → short Russian, so staff never see «Number must be less than or equal to 100» (audit UI-5, UI-9). */
+export function ruZod(m: string): string {
+  const n = (x: string) => Number(x).toLocaleString('ru-RU');
+  return m
+    .replace(/^Number must be less than or equal to (-?[\d.e+]+)$/, (_, x) => `должно быть не больше ${n(x)}`)
+    .replace(/^Number must be greater than or equal to (-?[\d.e+]+)$/, (_, x) => `должно быть не меньше ${n(x)}`)
+    .replace(/^Number must be greater than (-?[\d.e+]+)$/, (_, x) => `должно быть больше ${n(x)}`)
+    .replace(/^Number must be less than (-?[\d.e+]+)$/, (_, x) => `должно быть меньше ${n(x)}`)
+    .replace(/^String must contain at most (\d+) character\(s\)$/, (_, x) => `не длиннее ${x} символов`)
+    .replace(/^String must contain at least (\d+) character\(s\)$/, (_, x) => `не короче ${x} символов`)
+    .replace(/^Expected integer, received float$/, 'нужно целое число')
+    .replace(/^Required$/, 'обязательное поле')
+    .replace(/^Expected (\w+), received (\w+)$/, 'неверный тип значения')
+    .replace(/^Invalid enum value\..*$/, 'недопустимое значение');
 }

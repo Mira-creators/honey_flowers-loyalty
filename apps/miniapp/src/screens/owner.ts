@@ -90,7 +90,8 @@ function teamView() {
   const roles: Record<StaffDTO['role'], string> = { florist: 'Сотрудник', manager: 'Сотрудник', owner: 'Владелец' };
   return `<h2 class="h disp">Команда</h2>${errBox()}
     <p class="mut" style="margin-top:-6px">Сотрудник начисляет и отменяет покупки. Владелец ещё видит статистику, журнал и меняет правила и команду.</p>
-    <div class="list">${list ? (list.length ? list.map(s => `<div class="it"><div class="ic">${esc(s.name.slice(0, 1))}</div><div><div class="t">${esc(s.name)}</div><div class="s">${roles[s.role]}${s.telegramId ? ' · id ' + s.telegramId : ' · ждёт входа в бота'}</div></div><button class="link bad" data-act="removeStaff" data-id="${esc(s.id)}">Убрать</button></div>`).join('') : '<p class="mut">Пока никого. Добавьте флориста ниже.</p>') : '<p class="mut">Загрузка…</p>'}</div>
+    <div class="list">${list ? (list.filter(s => s.active).length ? list.filter(s => s.active).map(s => `<div class="it"><div class="ic">${esc(s.name.slice(0, 1))}</div><div><div class="t">${esc(s.name)}</div><div class="s">${roles[s.role]}${s.telegramId ? ' · id ' + s.telegramId : ' · ждёт входа в бота'}</div></div><button class="link bad" data-act="removeStaff" data-id="${esc(s.id)}">Убрать</button></div>`).join('') : '<p class="mut">Пока никого. Добавьте флориста ниже.</p>') : '<p class="mut">Загрузка…</p>'}</div>
+    ${list && list.some(s => !s.active) ? `<details class="mut" style="margin-top:6px"><summary>Убранные (${list.filter(s => !s.active).length})</summary><div class="list">${list.filter(s => !s.active).map(s => `<div class="it"><div class="ic">${esc(s.name.slice(0, 1))}</div><div><div class="t">${esc(s.name)}</div><div class="s">доступа нет${s.telegramId ? ' · id ' + s.telegramId : ''} · вернуть — добавьте снова</div></div></div>`).join('')}</div></details>` : ''}
     <div class="sub">Добавить сотрудника</div>
     <div class="form"><label class="fl" for="newStaff">Телефон (как в Telegram) или Telegram ID</label><input id="newStaff" inputmode="tel" placeholder="+998 90 123 45 67" autocomplete="off">
       <label class="fl" for="newRole">Роль</label><select id="newRole"><option value="florist">Сотрудник</option><option value="owner">Владелец</option></select>
@@ -121,7 +122,13 @@ function applyRuleField(d: EditableRulesDTO, el: HTMLInputElement | HTMLSelectEl
   else if (k === 'levelWindowDays') d.levelWindowDays = v.trim() === '' ? null : Math.max(1, n);
   else if (k === 'lvwarn') d.levelResetWarnDays = v.split(/[,\s]+/).map(x => Math.round(+x)).filter(x => x > 0).sort((a, b) => b - a);
   else if (k === 'staffCanReverse' || k === 'birthdayEnabled') (d as unknown as Record<string, boolean>)[k] = (el as HTMLInputElement).checked;
-  else (d as unknown as Record<string, number>)[k] = n;
+  else {
+    // no silent clamping: −5 used to become 0 % and switch honey payment off for everyone (audit UI-9).
+    // The raw number goes to the server, which answers with a clear Russian error.
+    const raw = v.trim() === '' ? NaN : Number(v.replace(',', '.'));
+    el.setAttribute('aria-invalid', String(!(Number.isFinite(raw) && raw >= 0)));
+    (d as unknown as Record<string, number>)[k] = Number.isFinite(raw) ? Math.round(raw) : NaN;
+  }
 }
 /** Update only the save bar while the owner types, so the focused input is not rebuilt. */
 function refreshSaveBar() {
@@ -153,9 +160,18 @@ actions.saveRules = async () => {
 actions.addStaff = async () => {
   const v = (document.getElementById('newStaff') as HTMLInputElement).value.trim();
   const role = (document.getElementById('newRole') as HTMLSelectElement).value as StaffDTO['role'];
-  if (v.replace(/\D/g, '').length < 5) { toast('Введите телефон или Telegram ID', 'error'); return; }
-  try { await api.addStaff(v, role); toast('Сотрудник добавлен', 'ok'); S.owner.staffList = await api.staff(); app.render(); }
-  catch (e) { toast((e as ApiErr).message, 'error'); }
+  const digits = v.replace(/\D/g, '');
+  if (digits.length < 5) { toast('Введите телефон или Telegram ID', 'error'); return; }
+  const add = async () => {
+    try { await api.addStaff(v, role); toast('Сотрудник добавлен', 'ok'); S.owner.staffList = await api.staff(); app.render(); }
+    catch (e) { toast((e as ApiErr).message, 'error'); }
+  };
+  // not a phone → a Telegram ID: a typo gives the role to a stranger, so ask first (audit UI-12)
+  const looksPhone = v.trim().startsWith('+') || digits.length === 9 || (digits.length === 12 && digits.startsWith('998'));
+  if (looksPhone) return add();
+  const sh = sheet(`<h4>Добавить по Telegram ID ${esc(digits)}?</h4><p>Это не похоже на номер телефона. Если ID набран с ошибкой, роль получит чужой человек. Надёжнее добавить по номеру телефона сотрудника (+998 …).</p><div class="row2"><button class="b" id="stfNo" style="justify-content:center">Исправить</button><button class="b acc" id="stfYes">Да, это его ID</button></div>`);
+  (sh.querySelector('#stfNo') as HTMLButtonElement).onclick = () => closeLayer();
+  (sh.querySelector('#stfYes') as HTMLButtonElement).onclick = () => { closeLayer(); void add(); };
 };
 actions.removeStaff = async el => {
   try { await api.removeStaff(el.dataset.id!); S.owner.staffList = await api.staff(); app.render(); toast('Сотрудник убран', 'ok'); }

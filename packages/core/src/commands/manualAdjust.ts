@@ -44,7 +44,8 @@ export function manualAdjust(rules: LoyaltyRules, state: ClientState, input: Man
     createdAt: now,
   });
   const balance = balanceOf(s) + input.amount;
-  if (balance < 0) out.warnings.push('balance becomes negative');
+  // a correction never takes the balance below zero: the client would see «−4 000 мёда» (audit UI-3)
+  if (balance < 0) throw new LoyaltyError('INSUFFICIENT_BALANCE', 'adjustment would make the balance negative', { balance: balanceOf(s) });
   out.events.push({ type: 'points_adjusted', clientId: s.clientId, amount: input.amount, balance, reason: input.reason.trim() });
   return mergeOutcomes(expiry, out);
 }

@@ -56,7 +56,7 @@ export function sellView(): string {
   return `<button class="back" data-act="stSellBack">‹ Назад</button>
     <h2 class="h disp">Продать букет №${b.number}</h2>
     <div class="calc"><span>${esc(b.lines.map((l) => `${l.name} × ${fmt(l.qty)}`).join(', '))}</span><span>Себестоимость ${money(b.cost)} · рекомендуем ${money(b.suggestedPrice)}</span></div>
-    <label class="fl" for="stSellPrice">Цена, сум</label><input id="stSellPrice" data-input="stSellPrice" inputmode="numeric" value="${esc(s.price)}">
+    <label class="fl" for="stSellPrice">Цена, сум</label><input id="stSellPrice" data-input="stSellPrice" inputmode="numeric" maxlength="9" value="${esc(s.price)}">
     <div class="sub">Клиент</div>
     ${s.client ? `<div class="cl"><div class="ava">${esc(s.client.name.slice(0, 1))}</div><div><b>${esc(s.client.name)}</b> <span class="mut">${esc(s.client.code)}</span><div class="mut">${esc(s.client.level.name)} · ${fmt(s.client.balance)} мёда</div></div></div>
       <button class="link" data-act="stNoClient">Без клиента</button>
@@ -117,7 +117,7 @@ actions.stNoClient = () => { Object.assign(ST.sell, { client: null, redeem: fals
 actions.stRedeem = () => { ST.sell.redeem = !ST.sell.redeem; changed(); };
 changes.stGift = (el) => { ST.sell.giftId = el.value || null; changed(); };
 actions.stChannel = (el) => { ST.sell.channel = el.dataset.v as 'store' | 'delivery'; changed(); };
-actions.stPay = (el) => { ST.sell.payment = el.dataset.v as typeof ST.sell.payment; render(); };
+actions.stPay = (el) => { const v = el.dataset.v as typeof ST.sell.payment; if (ST.sell.payment !== v) ST.sell.idem = newIdempotencyKey(); ST.sell.payment = v; render(); };
 actions.stPaid = async () => {
   const s = ST.sell;
   if (ST.busy || !s.preview) return;

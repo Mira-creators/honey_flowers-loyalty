@@ -79,7 +79,7 @@ const curl = (user, method, p, body) => fetch(BASE + p, { method, headers: { "X-
   check("client: registered, home with honeycomb", await ca.until(() => ca.text().includes("Привет, Дилноза") && ca.q("#comb")), ca.text().slice(0, 140));
   check("client: welcome bonus 15 000 shown", /15\s?000/.test(ca.q("#balN")?.textContent || ""), ca.q("#balN")?.textContent);
   check("consent: stored with the card", (await curl(A, "GET", "/api/me")).body.consent.required === false, "");
-  check("client: honey timer always shown", ca.text().includes("Мёд сгорит") || ca.text().includes("Мёд сгорает"), ca.q(".timers")?.textContent);
+  check("client: honey timer always shown", ca.text().includes("Мёд действует до") || ca.text().includes("Мёд сгорает"), ca.q(".timers")?.textContent);
   check("client: level rule shown", ca.text().includes("Уровень сохраняется"), ca.q(".timers")?.textContent);
   check("client: count-based progress", ca.text().includes("ещё 3 покупки"), ca.q(".prog")?.textContent);
   // Л6: optional birthday right after registration

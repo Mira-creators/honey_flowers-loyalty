@@ -44,11 +44,9 @@ function tabs(c: ClientSummaryDTO) {
 function timersBlock(c: ClientSummaryDTO): string {
   const t = L(), r = S.me!.rules;
   const level = c.levelKeptUntil ? t.levelKept(dayStr(c.levelKeptUntil)) : r.levelResetDays ? t.levelKeepRule(r.levelResetDays) : '';
-  const honey = c.expiresOn && c.balance > 0 ? t.honeyBurns(dayStr(plusDay(c.expiresOn))) : t.honeyRule(r.expiryDays);
+  const honey = c.expiresOn && c.balance > 0 ? t.honeyBurns(dayStr(c.expiresOn)) /* one date on the card: the last valid day (audit UI-14) */ : t.honeyRule(r.expiryDays);
   return `<div class="timers">${level ? `<div>${level}</div>` : ''}<div>${honey}</div></div>`;
 }
-/** 'YYYY-MM-DD' + 1 day: the day the мёд burns is the day after the last valid one. */
-const plusDay = (ymd: string) => new Date(Date.parse(ymd + 'T00:00:00Z') + 86_400_000).toISOString().slice(0, 10);
 
 /** Л6: an optional «укажите день рождения» card after registration (once per session). */
 function birthdayCard(c: ClientSummaryDTO): string {

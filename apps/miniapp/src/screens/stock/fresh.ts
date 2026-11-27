@@ -49,7 +49,7 @@ actions.stWo = (el) => {
   let reason: (typeof REASONS)[number][0] = l.freshness === 'overdue' ? 'wilt' : 'damage';
   const threshold = ST.catalog?.config.writeoffApprovalUzs ?? 200_000;
   const sh = sheet(`<h4>Списать: ${esc(l.name)}</h4><p>В партии от ${dayTxt(l.receivedOn)}: ${fmt(l.qty)} шт. Списание от ${fmt(threshold)} сум ждёт подтверждения владельца.</p>
-    <label class="fl" for="woQty">Сколько списать</label><input id="woQty" inputmode="numeric" value="${l.qty}">
+    <label class="fl" for="woQty">Сколько списать <small class="mut">(в партии ${l.qty})</small></label><input id="woQty" inputmode="numeric" value="" placeholder="0">
     <div class="chips">${REASONS.map(([v, t]) => `<button class="chip" data-r="${v}" aria-pressed="${v === reason}">${t}</button>`).join('')}</div>
     <input id="woNote" placeholder="Комментарий (для «Другое» обязателен)" maxlength="200">
     <button class="b danger full" id="woOk" style="justify-content:center">Списать</button>`);
