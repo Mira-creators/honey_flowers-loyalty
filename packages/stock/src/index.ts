@@ -13,3 +13,4 @@ export * from './pricing.js';
 export * from './freshness.js';
 export * from './disassembly.js';
 export * from './permissions.js';
+export * from './builder.js';

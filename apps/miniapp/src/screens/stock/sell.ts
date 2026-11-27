@@ -11,7 +11,8 @@ import { tg } from '../../tg';
 import { debounce, esc, fmt, toast } from '../../ui/dom';
 import { sapi, StockErr } from './sapi';
 import { openShowcase } from './showcase';
-import { money, render, ST } from './st';
+import { openBuilder, saveTemplateSheet, templateName } from './builder';
+import { money, render, saveFloristTab, ST } from './st';
 
 const PAY: Array<[typeof ST.sell.payment, string]> = [['cash', 'Наличные'], ['card', 'Карта'], ['transfer', 'Перевод']];
 
@@ -61,7 +62,7 @@ export function sellView(): string {
       <button class="tog" data-act="stRedeem" aria-pressed="${s.redeem}" ${s.client.balance <= 0 ? 'disabled' : ''}><span>Оплатить мёдом${p?.loyalty ? ` · до ${fmt(p.loyalty.maxRedeem)}` : ''}</span><span class="sw"></span></button>
       ${gifts.length ? `<label class="fl" for="stGift">Подарок клиента</label><select id="stGift" data-change="stGift"><option value="">Не применять</option>${gifts.map((g) => `<option value="${esc(g.id)}" ${s.giftId === g.id ? 'selected' : ''}>${esc(GIFT_LABELS[g.type] ?? g.type)}</option>`).join('')}</select>` : ''}`
     : `${tg.canScan() ? '<button class="b full" data-act="stScan" style="margin-bottom:8px">Сканировать QR клиента</button>' : ''}
-      <div class="search"><input id="stSellQ" placeholder="Телефон или код карты (HF…)" value="${esc(s.query)}" inputmode="search" autocomplete="off"><button class="b" data-act="stFindClient" aria-label="Найти">🔍</button></div>${matches}
+      <div class="search"><input id="stSellQ" data-input="stSellQ" placeholder="Телефон или код карты (HF…)" value="${esc(s.query)}" inputmode="search" autocomplete="off" enterkeyhint="search"><button class="b" data-act="stFindClient" aria-label="Найти">🔍</button></div>${matches}
       <p class="mut" style="margin:6px 0 0">Без клиента мёд не начисляется.</p>`}
     <div class="sub">Получение и оплата</div>
     <div class="seg2" role="group" aria-label="Канал"><button data-act="stChannel" data-v="store" aria-pressed="${s.channel === 'store'}">В магазине</button><button data-act="stChannel" data-v="delivery" aria-pressed="${s.channel === 'delivery'}">Доставка</button></div>
@@ -77,7 +78,8 @@ function doneView(): string {
     <p class="mut center">Продажа №${r.number} · ${money(r.total)}${r.honeyRedeemed ? ` · мёдом ${fmt(r.honeyRedeemed)}` : ''}</p>
     <div class="calc center-calc">${r.loyaltyStatus === 'done' ? `<span>+${fmt(r.cashback)} мёда клиенту${r.clientBalance !== null ? ` · баланс ${fmt(r.clientBalance)}` : ''}</span>` : r.loyaltyStatus === 'none' ? '<span>Без клиента</span>' : `<span class="bad">Мёд не начислен: ${esc(r.loyaltyError ?? '')}</span>`}</div>
     ${r.loyaltyStatus === 'failed' || r.loyaltyStatus === 'pending' ? `<div class="grid2"><button class="b full" data-act="stRetryLoyalty">Начислить мёд ещё раз</button><button class="b full" data-act="stRetryNoRedeem">Без оплаты мёдом</button></div>` : ''}
-    <button class="b acc full" data-act="stSellNext" style="margin-top:12px">Готово</button>`;
+    <div class="grid2" style="margin-top:12px"><button class="b acc full" data-act="stSellNew">Новый букет</button><button class="b full" data-act="stSellNext">Готово</button></div>
+    ${r.loyaltyStatus !== 'failed' && ST.sell.bouquets.length === 1 ? '<button class="link" data-act="stSellTpl" style="margin-top:6px">Сохранить этот букет как шаблон</button>' : ''}`;
 }
 
 async function findClient(q: string) {
@@ -88,6 +90,16 @@ async function findClient(q: string) {
     else toast('Клиент не найден. Можно продать без клиента.', 'error');
   } catch (e) { toast((e as Error).message, 'error'); }
 }
+
+/** A1: no «🔍» tap needed — a full phone number or card code searches by itself. */
+export function autoLookupReady(q: string): boolean {
+  const t = q.trim();
+  if (/^hf[0-9a-z]{4,}$/i.test(t)) return true;
+  const digits = t.replace(/\D/g, '');
+  return /^[+\d\s()-]+$/.test(t) && (digits.length === 9 || digits.length === 12);
+}
+const autoLookup = debounce((q: string) => { if (ST.sell.query === q && !ST.sell.client) void findClient(q); }, 350);
+inputs.stSellQ = (el) => { ST.sell.query = el.value; if (autoLookupReady(el.value)) autoLookup(el.value.trim()); };
 
 inputs.stSellPrice = (el) => { ST.sell.price = el.value.replace(/\D/g, ''); ST.sell.preview = null; ST.sell.idem = newIdempotencyKey(); refreshSalePreview(); };
 inputs.stDlv = (el) => { ST.sell.delivery = el.value.replace(/\D/g, ''); ST.sell.preview = null; ST.sell.idem = newIdempotencyKey(); refreshSalePreview(); };
@@ -127,6 +139,17 @@ async function retry(withoutRedeem: boolean) {
 actions.stRetryLoyalty = () => retry(false);
 actions.stRetryNoRedeem = () => retry(true);
 actions.stSellNext = () => { ST.sell.result = null; ST.sell.bouquets = []; backFromSell(); };
+actions.stSellNew = () => {
+  ST.sell.result = null; ST.sell.bouquets = [];
+  if (S.me?.role !== 'owner') { ST.ftab = 'bouquet'; saveFloristTab('bouquet'); }
+  void openBuilder();
+};
+actions.stSellTpl = () => {
+  const b = ST.sell.bouquets[0];
+  if (!b) return;
+  const lines = b.lines.map((l) => ({ itemId: l.itemId, qty: l.qty, name: l.name }));
+  saveTemplateSheet(lines.map(({ itemId, qty }) => ({ itemId, qty })), +ST.sell.price || b.priceCurrent || null, templateName(lines));
+};
 actions.stSellBack = () => backFromSell();
 
 export function backFromSell() {
