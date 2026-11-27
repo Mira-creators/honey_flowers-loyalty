@@ -26,10 +26,21 @@ export async function checkStockInvariants() {
         COALESCE((SELECT -SUM(value_mu) FROM stock_moves m WHERE m.doc_id = b.assembly_doc_id AND m.reverses_move_id IS NULL), 0) AS mv,
         (SELECT COALESCE(SUM(l.value_mu), 0) FROM stock_doc_lines l JOIN stock_items i ON i.id = l.item_id WHERE l.doc_id = b.assembly_doc_id AND i.track_stock = 0) AS untracked,
         (SELECT COALESCE(SUM(value_mu), 0) FROM stock_moves m WHERE m.doc_id = b.closed_doc_id AND m.reason = 'disassembly_return') AS ret,
-        (SELECT COALESCE(SUM(m.value_mu), 0) FROM stock_moves m JOIN stock_lots t ON t.id = m.lot_id WHERE m.doc_id = b.assembly_doc_id AND t.kind = 'deficit' AND m.reverses_move_id IS NULL) AS defv
+        (SELECT COALESCE(SUM(m.value_mu), 0) FROM stock_moves m JOIN stock_lots t ON t.id = m.lot_id WHERE m.doc_id = b.assembly_doc_id AND t.kind = 'deficit' AND m.reverses_move_id IS NULL) AS defv,
+        (SELECT COALESCE(-SUM(m.qty), 0) FROM stock_moves m WHERE m.doc_id = b.assembly_doc_id AND m.reverses_move_id IS NULL) AS aq,
+        (SELECT COALESCE(-SUM(m.qty), 0) FROM stock_moves m JOIN stock_lots t ON t.id = m.lot_id WHERE m.doc_id = b.assembly_doc_id AND t.kind = 'deficit' AND m.reverses_move_id IS NULL) AS dq,
+        (SELECT COALESCE(SUM(qty), 0) FROM stock_moves m WHERE m.doc_id = b.closed_doc_id AND m.reason = 'disassembly_return') AS rq,
+        (SELECT COUNT(*) FROM stock_moves m WHERE m.doc_id = b.closed_doc_id AND m.reason = 'disassembly_return'
+           AND m.lot_id NOT IN (SELECT lot_id FROM stock_moves x WHERE x.doc_id = b.assembly_doc_id)) AS foreign_lots
       FROM stock_bouquets b`)) {
     if (Number(r.cost_mu) !== Number(r.mv) + Number(r.untracked)) bad('bouquet cost', `${r.id}: ${r.cost_mu} ≠ ${r.mv} + ${r.untracked}`);
-    if (r.status === 'disassembled' && Number(r.ret) !== Number(r.mv) + Number(r.defv)) bad('disassembly return', `${r.id}: returned ${r.ret} ≠ assembly ${r.mv} − deficit ${-r.defv}`);
+    // Disassembly (audit API-1): every stem comes back — real stems to their lots, «в минус» stems to the deficit lot
+    // while its shortage is open, else to the receipt lots that settled it (up to their room; waste is separate).
+    if (r.status === 'disassembled') {
+      const rq = Number(r.rq), aq = Number(r.aq), dq = Number(r.dq);
+      if (rq > aq || rq < aq - dq) bad('disassembly return', `${r.id}: returned ${rq} stems, assembled ${aq} (${dq} «в минус»)`);
+      if (Number(r.foreign_lots) === 0 && rq === aq && Number(r.ret) !== Number(r.mv)) bad('disassembly return', `${r.id}: returned ${r.ret} ≠ assembly ${r.mv}`);
+    }
   }
   for (const r of await q(`SELECT s.id, s.reverses_move_id, o.qty AS oq, s.qty AS sq, o.lot_id = s.lot_id AS same, o.reason = s.reason AS sr FROM stock_moves s JOIN stock_moves o ON o.id = s.reverses_move_id`)) {
     if (Number(r.oq) !== -Number(r.sq) || !r.same || !r.sr) bad('storno mirror', `move ${r.id}`);

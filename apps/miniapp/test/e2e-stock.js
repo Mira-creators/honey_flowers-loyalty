@@ -152,7 +152,7 @@ const curl = (user, method, p, body) => fetch(BASE + p, { method, headers: { "X-
     fl.act("stQty", `[data-id="${id("EUW")}"]`); await fl.until(() => fl.q("#stQtyIn"));
     fl.q("#stQtyIn").value = String(euwNow + 4); fl.q("#stQtyOk").click(); await wait(30);
     check("A1: tile says «не хватает 4»", (fl.q(`[data-item="${id("EUW")}"] .st-tile-meta`)?.textContent || "").includes("не хватает 4"), fl.q(`[data-item="${id("EUW")}"]`)?.textContent);
-    check("A1: totals say «соберётся в минус» with numbers", fl.q('[data-short="minus"]') && fl.text().includes(`нужно ${euwNow + 4}, есть ${euwNow}`), fl.text().slice(-500));
+    check("A1: totals say «соберётся в минус» with numbers", fl.q('[data-short="minus"]') && fl.text().includes(`нужно ${euwNow + 4} шт, есть ${euwNow} шт`), fl.text().slice(-500));
     fl.act("stClear"); await wait(20);
 
     // the A1 sales below use 30 roses: restock so the write-off section still has a lot ≥ 200 000 сум
@@ -233,8 +233,12 @@ const curl = (user, method, p, body) => fetch(BASE + p, { method, headers: { "X-
     fl.q("#woQty").value = String(woQty); fl.q("#woOk").click();
     const woOk = await fl.until(() => fl.toasts().includes("ждёт подтверждения"));
     check(`write-off: ${woQty} roses → pending approval`, woOk, fl.toasts());
+    const pendingNow = (await curl(O, "GET", "/api/owner/stock/approvals")).body;
+    const myWo = pendingNow.find((p) => p.actor.includes("Дилноза") && p.lines.some((l) => l.qty === woQty));
+    // Other suites leave pending write-offs in the same DB (the threshold is per florist per day): clear them,
+    // so the overview (oldest 10) shows this one.
+    for (const p of pendingNow) if (p.docId !== myWo?.docId) await curl(O, "POST", `/api/owner/stock/approvals/${encodeURIComponent(p.docId)}`, { decision: "approve" });
     ow.act("stOwnerStock");
-    const myWo = (await curl(O, "GET", "/api/owner/stock/approvals")).body.find((p) => p.actor.includes("Дилноза") && p.lines.some((l) => l.qty === woQty));
     // Other suites may leave pending write-offs in the same DB: wait for THIS one's button, not any.
     check("approval: owner sees «На подтверждение»", await ow.until(() => ow.text().includes("На подтверждение") && ow.q(`[data-act="stApprove"][data-id="${myWo?.docId}"]`)), ow.text().slice(0, 400));
     ow.act("stApprove", `[data-id="${myWo?.docId}"]`);
