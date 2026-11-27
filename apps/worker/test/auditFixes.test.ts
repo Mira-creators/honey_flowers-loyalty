@@ -127,3 +127,112 @@ describe('audit 27.11', () => {
     expect(it2.available).toBe(it2.qty);
   });
 });
+
+// ---------------------------------------------------------------- blind API audit (API-*)
+
+const adjust = (clientId: string, points: number, idem = k('adj'), reason = 'Компенсация') =>
+  call(`/api/owner/clients/${clientId}/adjust`, { user: OWNER, body: { points, reason, idempotencyKey: idem } });
+
+describe('blind API audit 27.11', () => {
+  it('API-1: «в минус» → disassembly → late receipt: no stems vanish', async () => {
+    await receive([{ sku: 'TLR', qty: 10, price: 10_000 }]);
+    const r = await bouquet([{ sku: 'TLR', qty: 15 }], { allowShort: true, shortComment: 'приход ещё не внесён' });
+    expect(r.status).toBe(201);
+    const b = (await json<AssembleResultDTO>(r)).bouquet;
+    expect((await item('TLR')).qty).toBe(-5);
+    expect((await call(`/api/stock/bouquets/${b.id}/disassemble`, { user: FLORIST, body: { idempotencyKey: k('dis'), good: [] } })).status).toBe(201);
+    expect((await item('TLR')).qty).toBe(10); // 10 real + the open shortage closed by the 5 stems back
+    await receive([{ sku: 'TLR', qty: 5, price: 10_000 }]);
+    const it2 = await item('TLR');
+    expect(it2.qty).toBe(15);
+    expect(it2.available).toBe(15);
+    expect(await ledgerInvariants()).toEqual([]);
+  });
+
+  it('API-1: settled «в минус» → disassembly returns the stems into the settling receipt lot', async () => {
+    await receive([{ sku: 'TLR', qty: 10, price: 10_000 }]);
+    const b = (await json<AssembleResultDTO>(await bouquet([{ sku: 'TLR', qty: 15 }], { allowShort: true, shortComment: 'приход позже' }))).bouquet;
+    await receive([{ sku: 'TLR', qty: 5, price: 10_000 }]); // settles the shortage: 0 on hand
+    expect((await item('TLR')).qty).toBe(0);
+    expect((await call(`/api/stock/bouquets/${b.id}/disassemble`, { user: FLORIST, body: { idempotencyKey: k('dis'), good: [{ itemId: (await item('TLR')).id, qty: 12 }] } })).status).toBe(201);
+    expect((await item('TLR')).qty).toBe(12); // 15 back, 3 wasted
+    expect(await ledgerInvariants()).toEqual([]);
+  });
+
+  it('API-2: a florist cannot reverse a purchase on her own card', async () => {
+    const own = await register(FLORIST);
+    expect((await adjust(own.client!.id, 20_000)).status).toBe(200);
+    const p = await call('/api/staff/purchase', { user: FLORIST2, body: { clientId: own.client!.id, amount: 100_000, redeem: true, idempotencyKey: k('p') } });
+    expect(p.status).toBe(201);
+    const pid = (await json<{ purchaseId: string }>(p)).purchaseId;
+    const rev = await call(`/api/staff/purchase/${pid}/reverse`, { user: FLORIST, body: { reason: 'ошибка кассы' } });
+    expect(rev.status).toBe(403);
+    expect((await call(`/api/staff/purchase/${pid}/reverse`, { user: FLORIST2, body: { reason: 'ошибка кассы' } })).status).toBe(200);
+  });
+
+  it('API-3: a florist cannot claim a phone card she credited herself', async () => {
+    const PHONE = '+998935550123';
+    const made = await call('/api/staff/client/by-phone', { user: FLORIST, body: { phone: PHONE } });
+    expect(made.status).toBe(201);
+    const id = (await json<{ client: { id: string } }>(made)).client.id;
+    const p = await call('/api/staff/purchase', { user: FLORIST, body: { clientId: id, amount: 1_000_000, redeem: false, idempotencyKey: k('p') } });
+    expect(p.status).toBe(201);
+    const claim = await call('/api/test/register', { user: FLORIST, body: { consent: true, phone: PHONE, name: 'Флорист' } });
+    expect(claim.status).toBe(409);
+    const row = await testEnv.DB.prepare('SELECT telegram_id FROM clients WHERE id = ?').bind(id).first<{ telegram_id: number }>();
+    expect(row!.telegram_id).toBeLessThan(0);
+    // the real client still claims it
+    expect((await call('/api/test/register', { user: CLIENT, body: { consent: true, phone: PHONE, name: 'Анна' } })).status).toBe(201);
+  });
+
+  it('API-4: a purchase made by a bouquet sale is not reversed alone', async () => {
+    const me = await register(CLIENT);
+    await receive([{ sku: 'TLR', qty: 30, price: 7_000 }]);
+    const b = (await json<AssembleResultDTO>(await bouquet([{ sku: 'TLR', qty: 5 }]))).bouquet;
+    const s = await json<StockSaleResultDTO>(sell(b.id, { clientId: me.client!.id }));
+    expect(s.loyaltyStatus).toBe('done');
+    const rev = await call(`/api/staff/purchase/${s.purchaseId}/reverse`, { user: OWNER, body: { reason: 'проверка' } });
+    expect(rev.status).toBe(409);
+  });
+
+  it('API-7: a sale with an already used gift is refused before anything is posted', async () => {
+    const me = await register(CLIENT);
+    const g = await call(`/api/owner/clients/${me.client!.id}/grant`, { user: OWNER, body: { kind: 'gift', giftId: 'card', reason: 'проверка' }, headers: { 'idempotency-key': crypto.randomUUID() } });
+    expect(g.status).toBeLessThan(300);
+    const giftId = (await json<{ client: { gifts: Array<{ id: string; status: string }> } }>(call('/api/me', { user: CLIENT }))).client.gifts.find((x) => x.status === 'available')!.id;
+    expect((await call(`/api/staff/gift/${encodeURIComponent(giftId)}/use`, { user: FLORIST, body: {} })).status).toBe(200);
+    await receive([{ sku: 'TLR', qty: 30, price: 7_000 }]);
+    const b = (await json<AssembleResultDTO>(await bouquet([{ sku: 'TLR', qty: 5 }]))).bouquet;
+    expect((await sell(b.id, { clientId: me.client!.id, giftId })).status).toBe(409);
+    const st = await testEnv.DB.prepare('SELECT status FROM stock_bouquets WHERE id = ?').bind(b.id).first<{ status: string }>();
+    expect(st!.status).toBe('assembled');
+  });
+
+  it('API-8: an import row with an unreadable balance says so', async () => {
+    const r = await call('/api/owner/import', {
+      user: OWNER,
+      body: { batchId: 'audit-api8', fileName: 'x.csv', dryRun: true, options: { creditBalance: true, levelFromTotal: false, cellsFromCount: false }, rows: [{ line: 2, phone: '+998935550201', name: 'А', balance: -5000 }, { line: 3, phone: '+998935550202', name: 'Б', balance: 1e12 }] },
+    });
+    expect(r.status).toBeLessThan(300);
+    const rows = (await json<{ results: Array<{ line: number; message: string | null }> }>(r)).results;
+    for (const x of rows) expect(x.message).toMatch(/мёд .* не распознан/);
+  });
+
+  it('API-9: a receipt whose lot was used and fully returned is not cancellable', async () => {
+    const rec = await receive([{ sku: 'TLR', qty: 10, price: 7_000 }]);
+    const receiptId = (rec as { receiptId: string }).receiptId;
+    const b = (await json<AssembleResultDTO>(await bouquet([{ sku: 'TLR', qty: 4 }], { kind: 'showcase' }))).bouquet;
+    expect((await call(`/api/stock/bouquets/${b.id}/disassemble`, { user: FLORIST, body: { idempotencyKey: k('dis'), good: [] } })).status).toBe(201);
+    expect((await item('TLR')).qty).toBe(10);
+    const c = await call(`/api/owner/stock/receipts/${receiptId}/cancel`, { user: OWNER, body: {} });
+    expect(c.status).toBe(409);
+  });
+
+  it('API-14: the same adjustment key with another amount is a conflict, not a silent replay', async () => {
+    const me = await register(CLIENT);
+    const idem = k('adj');
+    expect((await adjust(me.client!.id, 100, idem)).status).toBe(200);
+    expect((await adjust(me.client!.id, 100, idem)).status).toBe(200);
+    expect((await adjust(me.client!.id, 99_999, idem, 'Другая причина')).status).toBe(409);
+  });
+});

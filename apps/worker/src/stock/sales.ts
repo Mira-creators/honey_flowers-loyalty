@@ -111,6 +111,14 @@ export async function postSale(app: AppContext, caller: Caller, body: unknown, c
     const prior = replayOf(p.doc, hash, 'sale');
     if (prior) return completeLoyalty(app, prior.id, true);
     if (p.client) assertNotOwnCard(app, caller, p.client);
+    // the gift must still be this client's and available BEFORE the stock part is posted; otherwise the sale
+    // is paid but its honey step can never complete (audit API-7). A race after this check still ends in
+    // «failed», and «Без оплаты мёдом» (clears the gift) finishes it.
+    if (req.giftId && p.client) {
+      const g = await db.prepare('SELECT status FROM rewards WHERE id = ? AND client_id = ?').bind(req.giftId, p.client.id).first<Row>();
+      if (!g) throw new HttpError(404, 'not_found', 'Подарок не найден у этого клиента');
+      if (g.status !== 'available') throw new HttpError(409, 'conflict', 'Подарок уже использован — обновите экран и выберите другой');
+    }
     if (!(p.total > 0)) throw new HttpError(400, 'validation', 'Сумма продажи должна быть больше 0');
     const { rules } = await app.repo.getActiveRules(app.now());
     if (p.total > rules.maxPurchaseAmount) throw new HttpError(400, 'validation', `Сумма покупки не может превышать ${rules.maxPurchaseAmount.toLocaleString('ru-RU')} сум`);

@@ -134,7 +134,8 @@ export async function validateInitData(initData: string, botToken: string, opts:
   } catch {
     throw new InitDataError('MALFORMED', 'user is not valid JSON');
   }
-  if (typeof user?.id !== 'number' || !Number.isSafeInteger(user.id)) {
+  // Telegram never issues id ≤ 0; negative ids are our placeholders for imported cards (audit API-16)
+  if (typeof user?.id !== 'number' || !Number.isSafeInteger(user.id) || user.id <= 0) {
     throw new InitDataError('MALFORMED', 'user.id is missing');
   }
 

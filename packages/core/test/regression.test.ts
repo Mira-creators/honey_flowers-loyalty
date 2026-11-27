@@ -309,6 +309,18 @@ describe('E13: manual adjustment settles overdue expiry first', () => {
   });
 });
 
+describe('audit API-14: the same adjustment key with another amount is a conflict', () => {
+  it('replays the same adjustment, refuses a different one', () => {
+    const sim = new Sim();
+    sim.buy(1_000_000, d0);
+    const t = plusDays(d0, 1);
+    const first = manualAdjust(sim.rules, sim.state, { idempotencyKey: 'k1', staffId: 's', amount: 100, reason: 'Компенсация' }, t);
+    const s1 = applyOutcome(sim.state, first);
+    expect(manualAdjust(sim.rules, s1, { idempotencyKey: 'k1', staffId: 's', amount: 100, reason: 'Компенсация' }, t).replayed).toBe(true);
+    expect(() => manualAdjust(sim.rules, s1, { idempotencyKey: 'k1', staffId: 's', amount: 99_999, reason: 'Другое' }, t)).toThrow(/different adjustment/);
+  });
+});
+
 describe('manual adjustment notifies the client', () => {
   it('emits points_adjusted with the signed amount, the new balance and the reason', () => {
     const sim = new Sim();

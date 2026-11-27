@@ -370,6 +370,15 @@ export async function cancelReceipt(app: AppContext, caller: Caller, docId: stri
   const settled = await db.prepare(`SELECT lot_id, -SUM(qty) AS q FROM stock_moves WHERE doc_id = ? AND reason = 'deficit_settle' AND qty < 0 GROUP BY lot_id`).bind(docId).all<Row>();
   const settledBy = new Map(settled.results.map((s) => [String(s.lot_id), num(s.q)]));
   for (const lot of lots!.results) if (num(lot.qty_on_hand) + (settledBy.get(String(lot.id)) ?? 0) !== num(lot.qty_received)) throw lotUsed(lot);
+  // a lot that was taken from and got everything back (bouquet disassembled / assembly cancelled) is still «used»:
+  // bouquets' cost history points to it (audit API-9)
+  const touched = await db
+    .prepare(`SELECT l.id, i.name FROM stock_lots l JOIN stock_items i ON i.id = l.item_id WHERE l.receipt_doc_id = ?1
+               AND EXISTS (SELECT 1 FROM stock_moves m WHERE m.lot_id = l.id AND m.doc_id <> ?1 AND m.reason <> 'deficit_settle') LIMIT 1`)
+    .bind(docId).all<Row>();
+  if (touched.results.length) {
+    throw new HttpError(409, 'lot_used', `Из партии «${String(touched.results[0]!.name)}» уже собирали букеты — отменить приход нельзя. Оформите списание остатка или исправьте инвентаризацией`);
+  }
   const actor = actorOf(caller);
   const now = app.now().toISOString();
   const { stmts, stornoId } = await stornoStatements(app, { id: docId }, actor, `storno:${docId}`, now);

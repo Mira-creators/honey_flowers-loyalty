@@ -280,6 +280,12 @@ staffRoutes.post('/purchase/:id/reverse', async (c) => {
   const purchase = await app.repo.findPurchaseById(c.req.param('id'));
   if (!purchase) throw new HttpError(404, 'not_found', 'Покупка не найдена');
   if (purchase.status === 'reversed') throw new HttpError(409, 'already_reversed', 'Эта покупка уже отменена');
+  // reversing returns spent honey: never on your own card, same as buying / handing out a gift (audit API-2)
+  assertNotOwnCard(app, caller, await ensureClient(app, purchase.clientId));
+  // a purchase made by a bouquet sale is reversed together with the sale, never alone (audit API-4)
+  if (purchase.idempotencyKey?.startsWith('sale:')) {
+    throw new HttpError(409, 'conflict', 'Эта покупка создана продажей букета со склада — её отменяют вместе с продажей. Обратитесь к владелице');
+  }
   const staff = actingStaff(caller);
   const res = await app.service.execute(purchase.clientId, ({ rules, state, now }) => {
     // Л8: the owner's switch «Сотрудники могут отменять покупки» (checked against the rules in force).

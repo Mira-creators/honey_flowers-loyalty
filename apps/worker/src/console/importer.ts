@@ -72,6 +72,8 @@ interface CleanRow {
   total: number | null;
   count: number | null;
   lastPurchase: string | null;
+  /** Values present in the file but not accepted (audit API-8: they were dropped silently). */
+  dropped: string[];
 }
 
 const okOr = <T>(schema: z.ZodType<T>, v: unknown): T | null => {
@@ -127,15 +129,22 @@ export async function runImport(
     }
     seen.add(phone);
     const name = r.name?.replace(/\s+/g, ' ').trim().slice(0, 60) || null;
+    const dropped: string[] = [];
+    const check = <T>(schema: z.ZodType<T>, v: unknown, what: string): T | null => {
+      const ok = okOr(schema, v);
+      if (ok === null && v !== null && v !== undefined && v !== '') dropped.push(`${what} «${String(v)}» не распознан — не загружен`);
+      return ok;
+    };
     clean.push({
       line: r.line,
       phone,
       name,
-      birthday: okOr(ymd, r.birthday),
-      balance: okOr(amount, r.balance),
-      total: okOr(amount, r.total),
-      count: okOr(amount, r.count),
-      lastPurchase: okOr(ymd, r.lastPurchase),
+      birthday: check(ymd, r.birthday, 'день рождения'),
+      balance: check(amount, r.balance, 'мёд'),
+      total: check(amount, r.total, 'сумма покупок'),
+      count: check(amount, r.count, 'число покупок'),
+      lastPurchase: check(ymd, r.lastPurchase, 'дата последней покупки'),
+      dropped,
     });
   }
 
@@ -210,7 +219,7 @@ export async function runImport(
     const honey = req.options.creditBalance && r.balance ? r.balance : 0;
     const tier = req.options.levelFromTotal ? legacyTier(rules, r.total, r.count) : 0;
     const cell = req.options.cellsFromCount ? legacyCell(rules, r.count) : 0;
-    const notes = [honey ? `мёд ${honey.toLocaleString('ru-RU')}` : null, tier ? `уровень «${rules.levels.tiers[tier]!.title}»` : null, cell ? `соты: ${cell}` : null].filter(Boolean);
+    const notes = [honey ? `мёд ${honey.toLocaleString('ru-RU')}` : null, tier ? `уровень «${rules.levels.tiers[tier]!.title}»` : null, cell ? `соты: ${cell}` : null, ...r.dropped].filter(Boolean);
     results.push({ line: r.line, phone: r.phone, status: 'create', message: notes.length ? notes.join(', ') : null, honey, linked: false });
     const id = crypto.randomUUID();
     const key = `import:${req.batchId}:${r.phone}`;

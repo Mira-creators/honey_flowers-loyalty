@@ -278,6 +278,29 @@ export async function disassemble(app: AppContext, caller: Caller, id: string, b
     if (m) m.taken += l.taken;
     else merged.set(l.id, { ...l });
   }
+  // «в минус» stems go back too (audit API-1): the open shortage of the deficit lot, then the receipt lots that settled it
+  const deficits = [...merged.values()].filter((l) => l.deficit);
+  if (deficits.length) {
+    const rows = await db.batch<Row>(deficits.flatMap((d) => [
+      db.prepare('SELECT qty_on_hand FROM stock_lots WHERE id = ?').bind(d.id),
+      db.prepare(
+        `SELECT DISTINCT t.id, t.qty_received - t.qty_on_hand AS room, t.unit_cost_mu, t.priority, t.expires_on, t.received_at
+           FROM stock_moves d JOIN stock_moves r ON r.doc_id = d.doc_id AND r.line_no = d.line_no AND r.reason = 'deficit_settle' AND r.qty < 0
+           JOIN stock_lots t ON t.id = r.lot_id
+          WHERE d.lot_id = ? AND d.reason = 'deficit_settle' AND d.qty > 0 AND d.reverses_move_id IS NULL
+            AND NOT EXISTS (SELECT 1 FROM stock_moves x WHERE x.reverses_move_id = d.id)
+            AND t.qty_received > t.qty_on_hand
+          ORDER BY t.received_at DESC, t.id`,
+      ).bind(d.id),
+    ]));
+    deficits.forEach((d, k) => {
+      d.deficitOpen = Math.max(0, -num(rows[2 * k]!.results[0]?.qty_on_hand));
+      d.refill = rows[2 * k + 1]!.results.map((r) => ({
+        id: String(r.id), itemId: d.itemId, qty: 0, room: num(r.room), unitCostMu: num(r.unit_cost_mu), priority: num(r.priority),
+        expiresOn: strOrNull(r.expires_on), receivedAt: String(r.received_at),
+      }));
+    });
+  }
   const plan = planDisassembly([...merged.values()], new Map(req.good.map((g) => [g.itemId, g.qty])));
   const now = opts.nowIso ?? app.now().toISOString();
   const docDate = tashkentDay(now);

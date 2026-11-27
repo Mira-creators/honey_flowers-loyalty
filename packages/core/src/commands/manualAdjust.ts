@@ -2,6 +2,7 @@ import { applyOutcome, emptyOutcome, mergeOutcomes, type Outcome } from '../outc
 import type { LoyaltyRules } from '../rules.js';
 import { balanceOf } from '../state.js';
 import type { ClientState } from '../types.js';
+import { LoyaltyError } from '../errors.js';
 import { assert } from './common.js';
 import { settleExpiry } from './expiry.js';
 
@@ -20,7 +21,14 @@ export interface ManualAdjustInput {
 export function manualAdjust(rules: LoyaltyRules, state: ClientState, input: ManualAdjustInput, now: Date): Outcome {
   assert(Number.isSafeInteger(input.amount) && input.amount !== 0, 'INVALID_INPUT', 'amount must be a non-zero integer');
   assert(input.reason?.trim(), 'INVALID_INPUT', 'reason is required');
-  if (state.ledger.some((e) => e.idempotencyKey === input.idempotencyKey)) return { ...emptyOutcome(), replayed: true };
+  const prior = state.ledger.find((e) => e.idempotencyKey === input.idempotencyKey);
+  if (prior) {
+    // same key with another amount or reason is a different operation, not a replay (audit API-14)
+    if (prior.amount !== input.amount || (prior.reason ?? '').trim() !== input.reason.trim()) {
+      throw new LoyaltyError('IDEMPOTENCY_CONFLICT', 'idempotencyKey was already used for a different adjustment');
+    }
+    return { ...emptyOutcome(), replayed: true };
+  }
   // Overdue expiry is settled first: an adjustment cannot "save" burnt points.
   const expiry = settleExpiry(rules, state, now);
   const s = applyOutcome(state, expiry);

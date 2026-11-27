@@ -621,6 +621,10 @@ export class D1Repository implements Repository {
                AND demo = 0                                                              -- never a demo client (also negative ids)
                AND (EXISTS (SELECT 1 FROM client_imports i WHERE i.client_id = clients.id) -- a client created by a base import
                     OR EXISTS (SELECT 1 FROM phone_credits p WHERE p.client_id = clients.id AND p.claimed_at IS NULL)) -- or by staff for a phone (Л9)
+               -- a staff member never takes over a card with purchases they made themselves (audit API-3: open a card
+               -- for your own phone, credit it yourself, then share your contact with the bot)
+               AND NOT EXISTS (SELECT 1 FROM purchases pu WHERE pu.client_id = clients.id
+                                 AND (pu.staff_id = 'tg:' || ?1 OR pu.staff_id IN (SELECT s.id FROM staff s WHERE s.telegram_id = ?1)))
              RETURNING *`,
           )
           .bind(patch.telegramId, patch.name, patch.language === 'uz' ? 'uz' : 'ru', iso(patch.consentAt), clientId, placeholderTelegramId, patch.consentVersion ?? null),

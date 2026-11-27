@@ -74,6 +74,13 @@ describe('Telegram initData validation', () => {
     expect(await codeOf(() => validateInitData(raw, BOT_TOKEN, { now }))).toBe('FUTURE_AUTH_DATE');
   });
 
+  it('rejects user ids Telegram never issues (≤ 0, our placeholders) — audit API-16', async () => {
+    for (const id of [0, -1, -990_000_123]) {
+      const raw = await buildInitData({ auth_date: authDate, user: JSON.stringify({ id, first_name: 'X' }) }, BOT_TOKEN);
+      expect(await codeOf(() => validateInitData(raw, BOT_TOKEN, { now }))).toBe('MALFORMED');
+    }
+  });
+
   it('rejects signed data without a user', async () => {
     const raw = await buildInitData({ auth_date: authDate }, BOT_TOKEN);
     expect(await codeOf(() => validateInitData(raw, BOT_TOKEN, { now }))).toBe('MALFORMED');
