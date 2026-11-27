@@ -17,7 +17,7 @@ import { receiptView } from './receipt';
 import { sapi } from './sapi';
 import { backFromSell, sellView } from './sell';
 import { openShowcase, showcaseView } from './showcase';
-import { ST, type FloristTab } from './st';
+import { ST, saveFloristTab, savedFloristTab, type FloristTab } from './st';
 
 export { ST };
 
@@ -36,7 +36,9 @@ export function stockBoot(role: string): Promise<void> {
     ST.ftab = 'desk';
     ST.screen = role === 'owner' ? 'home' : 'bouquet';
     probing = null;
-    app.render();
+    // A1: a florist re-opens the app on the stock tab she used last (one tap less per bouquet).
+    const last = role === 'owner' || !ST.status ? 'desk' : savedFloristTab();
+    if (last !== 'desk') openTab(last); else app.render();
   })();
   return probing;
 }
@@ -102,6 +104,7 @@ export function stockBack(): boolean {
 
 function openTab(t: FloristTab) {
   ST.ftab = t;
+  saveFloristTab(t);
   if (t === 'desk') { app.render(); void loadRecent(); return; }
   if (t === 'bouquet') void openBuilder();
   else if (t === 'fresh') void openFresh();

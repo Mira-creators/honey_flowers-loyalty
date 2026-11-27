@@ -119,6 +119,74 @@ const curl = (user, method, p, body) => fetch(BASE + p, { method, headers: { "X-
     check("sell: «Продано» with honey", await fl.until(() => fl.text().includes("Продано") && fl.text().includes("мёда клиенту")), fl.toasts() || fl.text().slice(0, 300));
     const after = (await curl(C, "GET", "/api/me")).body.client.balance;
     check("sell: client's honey balance grew", after > before, `${before} → ${after}`);
+    // ---------- A1: template from the sold bouquet, «Новый букет», tap count ----------
+    check("A1: done screen offers «Новый букет» and «как шаблон»", !!fl.q('[data-act="stSellNew"]') && !!fl.q('[data-act="stSellTpl"]'), fl.text().slice(-300));
+    fl.act("stSellTpl");
+    await fl.until(() => fl.q("#stTplName"));
+    const tplName = "E2E шаблон " + String(O).slice(-4);
+    fl.q("#stTplName").value = tplName; fl.q("#stTplOk").click();
+    check("A1: template saved from the sold bouquet", await fl.until(() => fl.toasts().includes("Шаблон сохранён")), fl.toasts());
+    const tpl = (await curl(F, "GET", "/api/stock/templates")).body.find((t) => t.name === tplName);
+    check("A1: template = sold composition with its price", !!tpl && tpl.lines.length === 3 && tpl.lines.some((l) => l.itemId === id("RN60") && l.qty === 15) && tpl.price > 0, JSON.stringify(tpl));
+    fl.act("stSellNew");
+    check("A1: «Новый букет» opens the builder", await fl.until(() => fl.q(`[data-item="${id("RN60")}"]`) && fl.text().includes("Новый букет")), fl.text().slice(0, 200));
+    check("A1: stock tab remembered on this phone", fl.w.localStorage.getItem("honey.stock.ftab") === "bouquet", fl.w.localStorage.getItem("honey.stock.ftab"));
+
+    // undo: +1, preset, template — each step back
+    fl.act("stAdd", `[data-id="${id("EUC")}"]`); await wait(20);
+    fl.act("stQty", `[data-id="${id("RN60")}"]`); await fl.until(() => fl.q('[data-preset="7"]'));
+    fl.q('[data-preset="7"]').click(); await wait(20);
+    check("A1: preset sets 7 in one tap", fl.q(`[data-act="stQty"][data-id="${id("RN60")}"]`)?.textContent === "7", fl.q(`[data-act="stQty"][data-id="${id("RN60")}"]`)?.textContent);
+    check("A1: undo button names the last action", (fl.q('[data-act="stUndo"]')?.textContent || "").includes("0 → 7"), fl.q('[data-act="stUndo"]')?.textContent);
+    fl.act("stUndo"); await wait(20);
+    check("A1: undo → roses back to 0, eucalyptus kept", fl.q(`[data-act="stQty"][data-id="${id("RN60")}"]`)?.textContent === "0" && fl.q(`[data-act="stQty"][data-id="${id("EUC")}"]`)?.textContent === "1");
+    fl.act("stUndo"); await wait(20);
+    check("A1: second undo → empty bouquet", !fl.q('[data-act="stUndo"]') && fl.q(`[data-act="stQty"][data-id="${id("EUC")}"]`)?.textContent === "0", fl.text().slice(-200));
+    // tiles keep their place when something is added (no jump under the finger)
+    const order = () => fl.qa(".st-tile").map((t) => t.dataset.item).join(",");
+    const o1 = order(); fl.act("stAdd", `[data-id="${fl.qa(".st-tile")[5]?.dataset.item}"]`); await wait(20);
+    check("A1: tile order stable after adding", order() === o1);
+    fl.act("stClear"); await wait(20);
+    // «не хватает» on the tile and in the totals, before the server is asked
+    const euwNow = await qtyOf("EUW");
+    fl.act("stQty", `[data-id="${id("EUW")}"]`); await fl.until(() => fl.q("#stQtyIn"));
+    fl.q("#stQtyIn").value = String(euwNow + 4); fl.q("#stQtyOk").click(); await wait(30);
+    check("A1: tile says «не хватает 4»", (fl.q(`[data-item="${id("EUW")}"] .st-tile-meta`)?.textContent || "").includes("не хватает 4"), fl.q(`[data-item="${id("EUW")}"]`)?.textContent);
+    check("A1: totals say «соберётся в минус» with numbers", fl.q('[data-short="minus"]') && fl.text().includes(`нужно ${euwNow + 4}, есть ${euwNow}`), fl.text().slice(-500));
+    fl.act("stClear"); await wait(20);
+
+    // the A1 sales below use 30 roses: restock so the write-off section still has a lot ≥ 200 000 сум
+    const r3 = await curl(O, "POST", "/api/stock/receipts", { idempotencyKey: "e2e-" + randomUUID(), currency: "UZS", priceMode: "lines", confirm: true, lines: [{ itemId: id("RN60"), qty: 50, unit: "base", price: 12000, per: "unit" }] });
+    check("A1: restock roses (API)", r3.status === 201, JSON.stringify(r3.body));
+
+    // tap count: a free 3-kind bouquet with a client (15 roses, 3 eucalyptus, kraft)
+    let taps = 0;
+    const tap = (fn) => { taps++; return fn(); };
+    const preset = async (sku, n) => { tap(() => fl.act("stQty", `[data-id="${id(sku)}"]`)); await fl.until(() => fl.q(`[data-preset="${n}"]`)); tap(() => fl.q(`[data-preset="${n}"]`).click()); await wait(20); };
+    const sellTo = async () => {
+      await fl.until(() => fl.q("#stSellQ"));
+      tap(() => fl.type("#stSellQ", phone)); // one tap on the field (in Telegram: one tap «Сканировать QR»); the number itself is typed
+      const found = await fl.until(() => fl.text().includes("Гульнора") && fl.text().includes("Кешбэк"));
+      tap(() => fl.act("stPaid"));
+      return found && (await fl.until(() => fl.text().includes("Продано")));
+    };
+    await preset("RN60", 15);
+    await preset("EUC", 3);
+    tap(() => fl.act("stAdd", `[data-id="${id("KRF")}"]`)); await wait(20);
+    tap(() => fl.act("stAssemble"));
+    await fl.until(() => fl.text().includes("Продать букет №"));
+    const soldFree = await sellTo();
+    const freeTaps = taps;
+    check(`A1: free 3-kind bouquet sold with client in ${freeTaps} taps (≤ 8)`, soldFree && freeTaps <= 8, `${freeTaps} taps; ${fl.toasts() || fl.text().slice(0, 200)}`);
+    tap(() => fl.act("stSellNew"));
+    await fl.until(() => fl.q(`[data-act="stTpl"][data-id="${tpl?.id}"]`));
+    taps = 0;
+    tap(() => fl.act("stTpl", `[data-id="${tpl?.id}"]`)); await wait(20);
+    tap(() => fl.act("stAssemble"));
+    await fl.until(() => fl.text().includes("Продать букет №"));
+    const soldTpl = await sellTo();
+    check(`A1: bouquet from a template sold with client in ${taps} taps (≤ 5)`, soldTpl && taps <= 5, `${taps} taps; ${fl.toasts() || fl.text().slice(0, 200)}`);
+    console.log(`A1 TAPS: free 3 kinds = ${freeTaps}, template = ${taps}`);
     fl.act("stSellNext");
 
     // ---------- stock_short sheet ----------

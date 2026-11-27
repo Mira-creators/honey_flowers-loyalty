@@ -3,7 +3,7 @@ import type {
   BouquetDTO, FreshnessDTO, ReceiptFormDTO, ReceiptPreviewDTO, StockCatalogDTO, StockItemDTO, StockOverviewDTO, StockSalePreviewDTO,
   StockSaleResultDTO, StockStatusDTO, StockTemplateDTO, ClientSummaryDTO, StockShortDetails,
 } from '@honey/contracts';
-import { bouquetCost, pickLots, shareLevel, shares, suggestPrice, type CostLine } from '@honey/stock';
+import { bouquetCost, pickLots, shareLevel, shares, shortageOf, suggestPrice, type CostLine, type UndoEntry } from '@honey/stock';
 import { newIdempotencyKey } from '../../api';
 import { app } from '../../state';
 import { esc, fmt } from '../../ui/dom';
@@ -37,6 +37,8 @@ export const ST = {
     q: '' as string,
     idem: '',
     short: null as StockShortDetails | null,
+    /** A1: undo history of this bouquet (state before each action). */
+    undo: [] as UndoEntry[],
   },
   sell: {
     bouquets: [] as BouquetDTO[],
@@ -85,7 +87,7 @@ export async function loadCatalog(force = false): Promise<void> {
 }
 
 export function resetBuilder() {
-  Object.assign(ST.builder, { qty: {}, planned: null, templateId: null, kind: 'order', price: '', priceEdited: false, short: null, idem: newIdempotencyKey() });
+  Object.assign(ST.builder, { qty: {}, planned: null, templateId: null, kind: 'order', price: '', priceEdited: false, short: null, undo: [], idem: newIdempotencyKey() });
 }
 export function resetSell(bouquets: BouquetDTO[]) {
   Object.assign(ST.sell, {
@@ -125,9 +127,18 @@ export function builderCost() {
     lines, cost, suggested, price, ...sh,
     costLevel: shareLevel(sh.costShare, t.costShare, t.amberBandPp), flowersLevel: shareLevel(sh.flowersShare, t.flowersShare, t.amberBandPp),
     anyShort: lines.some((l) => l.short),
+    shortage: shortageOf(ST.builder.qty, c.items, c.config.negativePolicy),
   };
 }
 
 export const render = () => app.render();
+
+/** Florist's last stock tab on this phone: the app opens where she left off (one tap less). */
+const TAB_KEY = 'honey.stock.ftab';
+export function savedFloristTab(): FloristTab {
+  try { const t = localStorage.getItem(TAB_KEY); if (t === 'desk' || t === 'bouquet' || t === 'fresh' || t === 'showcase') return t; } catch { /* storage off */ }
+  return 'desk';
+}
+export function saveFloristTab(t: FloristTab) { try { localStorage.setItem(TAB_KEY, t); } catch { /* storage off */ } }
 export const pctTxt = (x: number) => `${(x * 100).toFixed(1).replace('.', ',')}%`;
 export const dayTxt = (d: string) => new Date(`${d}T00:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', timeZone: 'UTC' });
