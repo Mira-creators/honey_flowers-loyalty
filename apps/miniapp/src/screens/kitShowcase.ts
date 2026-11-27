@@ -3,7 +3,7 @@
  * Показывает всё, из чего собираются экраны: цвета темы, шрифты, отступы, кнопки, карточки, поля, плашки,
  * листы, тосты, состояния «загрузка / пусто / ошибка / нет сети», шмеля в трёх позах. Светлая и тёмная тема — переключателем.
  */
-import { S, actions } from '../state';
+import { S, actions, app } from '../state';
 import { THEMES, ACTIVE_THEME, COLOR_ROLES, applyTheme } from '../config/themes';
 import { tg } from '../tg';
 import { esc, toast, sheet, closeLayer } from '../ui/dom';
@@ -91,7 +91,8 @@ export function openKitShowcase() {
 
 let clicks = 0;
 actions.openKit = () => openKitShowcase();
-actions.kitClose = () => { dark = null; paint(); closeLayer(); tg.backButton(null); };
+// closing re-renders the screen underneath, which sets its own back button again (audit CODE-19)
+actions.kitClose = () => { dark = null; paint(); closeLayer(); tg.backButton(null); app.render(); };
 actions.kitDark = el => { const v = el.dataset.v; dark = v === 'auto' ? null : v === 'dark'; paint(); openKitShowcase(); };
 actions.kitBusy = async el => {
   await busy('kitBusy', el, async () => { clicks++; await new Promise(r => setTimeout(r, 1200)); });

@@ -26,7 +26,9 @@ function saleBody() {
   const per = s.bouquets.length === 1 ? [{ id: s.bouquets[0]!.id, price }] : s.bouquets.map((b) => ({ id: b.id }));
   const dlv = deliveryItemId();
   const services = s.channel === 'delivery' && dlv && +s.delivery > 0 ? [{ itemId: dlv, price: Math.floor(+s.delivery) }] : [];
-  return { clientId: s.client?.id ?? null, bouquets: per, services, channel: s.channel, redeem: s.redeem, giftId: s.giftId, paymentMethod: s.payment };
+  // the honey amount the client saw in the preview is fixed into the sale (audit CODE-7)
+  const redeemPoints = s.redeem && s.preview?.loyalty ? s.preview.loyalty.redeemed : null;
+  return { clientId: s.client?.id ?? null, bouquets: per, services, channel: s.channel, redeem: s.redeem, redeemPoints, giftId: s.giftId, paymentMethod: s.payment };
 }
 
 export const refreshSalePreview = debounce(async () => {
@@ -98,7 +100,7 @@ export function autoLookupReady(q: string): boolean {
   const digits = t.replace(/\D/g, '');
   return /^[+\d\s()-]+$/.test(t) && (digits.length === 9 || digits.length === 12);
 }
-const autoLookup = debounce((q: string) => { if (ST.sell.query === q && !ST.sell.client) void findClient(q); }, 350);
+const autoLookup = debounce((q: string) => { if (ST.sell.query.trim() === q && !ST.sell.client) void findClient(q); }, 350);
 inputs.stSellQ = (el) => { ST.sell.query = el.value; if (autoLookupReady(el.value)) autoLookup(el.value.trim()); };
 
 inputs.stSellPrice = (el) => { ST.sell.price = el.value.replace(/\D/g, ''); ST.sell.preview = null; ST.sell.idem = newIdempotencyKey(); refreshSalePreview(); };

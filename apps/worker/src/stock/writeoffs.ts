@@ -44,10 +44,14 @@ export async function postWriteoff(app: AppContext, caller: Caller, body: unknow
   const ids = [...new Set(req.lines.map((l) => l.itemId))];
   const ph = ids.map(() => '?').join(',');
   for (let attempt = 0; attempt < 3; attempt++) {
-    const [items, lots, doc] = await db.batch<Row>([
+    const today = new Date(Date.parse(opts.nowIso ?? app.now().toISOString()) + 5 * 3_600_000).toISOString().slice(0, 10);
+    const [items, lots, doc, day] = await db.batch<Row>([
       db.prepare(`SELECT id, name, track_stock, kind FROM stock_items WHERE id IN (${ph})`).bind(...ids),
       db.prepare(`SELECT id, item_id, qty_on_hand, unit_cost_mu, priority, expires_on, received_at FROM stock_lots WHERE item_id IN (${ph}) AND qty_on_hand > 0 ORDER BY item_id, priority DESC, expires_on, received_at, id`).bind(...ids),
       docByKeyStmt(db, req.idempotencyKey),
+      // the same florist's write-offs earlier today (Tashkent): the approval threshold is per day, so it cannot be
+      // bypassed by splitting one big write-off into several small documents (audit CODE-10)
+      db.prepare(`SELECT COALESCE(SUM(total_value_mu), 0) AS v FROM stock_docs WHERE kind = 'writeoff' AND actor_id = ? AND doc_date = ? AND status = 'posted' AND approval <> 'rejected'`).bind(actor.id, today),
     ]);
     const prior = replayOf((doc!.results[0] as unknown as DocRow) ?? null, hash, 'writeoff');
     if (prior) return writeoffResult(app, prior.id, true);
@@ -87,7 +91,8 @@ export async function postWriteoff(app: AppContext, caller: Caller, body: unknow
     }
     const valueMu = totalValue(moves);
     const valueUzs = muToUzs(valueMu);
-    const big = valueUzs >= cfg.writeoffApprovalUzs;
+    const dayBeforeUzs = muToUzs(num(day!.results[0]?.v));
+    const big = valueUzs >= cfg.writeoffApprovalUzs || (caller.role !== 'owner' && dayBeforeUzs + valueUzs >= cfg.writeoffApprovalUzs);
     const pending = caller.role !== 'owner' && big;
     const now = opts.nowIso ?? app.now().toISOString();
     const docDate = new Date(Date.parse(now) + 5 * 3_600_000).toISOString().slice(0, 10);

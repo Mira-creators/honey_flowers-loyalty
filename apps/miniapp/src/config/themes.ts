@@ -135,8 +135,22 @@ export const COLOR_ROLES = ['bg', 'surface', 'surface2', 'ink', 'muted', 'line',
   'leaf', 'leaf-deep', 'leaf-soft', 'petal', 'petal-deep', 'petal-soft', 'on-petal', 'good', 'good-soft', 'on-good', 'bad', 'bad-soft', 'on-bad',
   'warn', 'warn-soft', 'scrim', 'shadow', 'focus', 'notif', 'notif-ink', 'qr-bg', 'knob', 'skel', 'skel-hi'] as const;
 
+/** a·p + b·(1−p) for #RGB / #RRGGBB colours; anything else (rgba(), var()) falls back to `a`. */
+export function mixHex(a: string, b: string, p: number): string {
+  const rgb = (h: string): number[] | null => {
+    const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(h.trim());
+    if (!m) return null;
+    const x = m[1]!.length === 3 ? m[1]!.split('').map((c) => c + c).join('') : m[1]!;
+    return [0, 2, 4].map((i) => parseInt(x.slice(i, i + 2), 16));
+  };
+  const A = rgb(a), B = rgb(b);
+  if (!A || !B) return a;
+  return '#' + A.map((v, i) => Math.round(v * p + B[i]! * (1 - p)).toString(16).padStart(2, '0')).join('').toUpperCase();
+}
+
 function themeDefaults(pal: Record<string, string>, dark: boolean): Record<string, string> {
-  const mix = (c: string, pct: number) => `color-mix(in srgb, ${c} ${pct}%, ${pal.surface})`;
+  // Mixed in JS, not with CSS color-mix(): older WebViews (Android < 111, iOS < 16.2) drop the whole declaration (audit CODE-20).
+  const mix = (c: string, pct: number) => mixHex(c, pal.surface ?? '#FFFFFF', pct / 100);
   return {
     'comb-hi': pal.comb, leaf: pal.good, 'leaf-deep': pal.good, wash: 'none', 'comb-wash': 'none',
     'on-bad': '#FFFFFF', 'on-petal': pal.ink, 'on-good': '#FFFFFF', warn: pal['accent-deep'],

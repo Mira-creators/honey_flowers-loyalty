@@ -36,7 +36,7 @@ export function popUndo(stack: readonly UndoEntry[]): { entry: UndoEntry | null;
   return { entry: stack[stack.length - 1]!, stack: stack.slice(0, -1) };
 }
 
-export interface ShortItemInfo { id: string; name: string; qty: number; trackStock: boolean }
+export interface ShortItemInfo { id: string; name: string; qty: number; trackStock: boolean; /** Σ positive lots — the server's view; falls back to max(0, qty). */ available?: number }
 export interface ShortLine { itemId: string; name: string; need: number; have: number; missing: number }
 export interface ShortState {
   lines: ShortLine[];
@@ -51,7 +51,7 @@ export function shortageOf(qty: Record<string, number>, items: readonly ShortIte
   for (const [itemId, need] of Object.entries(qty)) {
     const it = byId.get(itemId);
     if (!it || !it.trackStock || need <= 0) continue;
-    const have = Math.max(0, it.qty);
+    const have = it.available ?? Math.max(0, it.qty);
     if (need > have) lines.push({ itemId, name: it.name, need, have, missing: need - have });
   }
   return { lines, mode: lines.length === 0 ? 'ok' : policy === 'block' ? 'blocked' : 'minus' };

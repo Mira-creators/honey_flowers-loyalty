@@ -7,6 +7,7 @@ import type { AssembleResultDTO, StockShortDetails } from '@honey/contracts';
 import { popUndo, pushUndo, QTY_PRESETS, snapshotOf, tileOrder } from '@honey/stock';
 import { actions, inputs } from '../../state';
 import { tg } from '../../tg';
+import { newIdempotencyKey } from '../../api';
 import { closeLayer, esc, fmt, sheet, toast } from '../../ui/dom';
 import { sapi, StockErr } from './sapi';
 import { builderCost, itemById, loadCatalog, money, pctTxt, qtyText, render, resetBuilder, resetSell, ST, tile } from './st';
@@ -44,11 +45,11 @@ export function builderView(): string {
     const qn = b.qty[it.id] ?? 0;
     const old = it.ladder[0] && (it.ladder[0].freshness === 'overdue' || it.ladder[0].freshness === 'today');
     const m = missing.get(it.id);
-    const have = it.unit.factor > 1 ? it.qty / it.unit.factor : it.qty;
+    const avail = it.available ?? Math.max(0, it.qty);
     const meta = !it.trackStock ? 'без учёта'
-      : m ? `<span class="st-bad">не хватает ${fmt(m.missing)}</span>`
-      : it.qty <= 0 ? '<span class="st-bad">нет на складе</span>'
-      : `ост ${fmt(have)}`;
+      : m ? `<span class="st-bad">не хватает ${esc(qtyText(it, m.missing))}</span>`
+      : avail <= 0 ? '<span class="st-bad">нет на складе</span>'
+      : `ост ${esc(qtyText(it, avail))}`;
     return `<div class="st-tile ${qn ? 'on' : ''} ${m ? 'short' : ''}" data-item="${esc(it.id)}">
       <button class="st-tile-main" data-act="stAdd" data-id="${esc(it.id)}" aria-label="Добавить ${esc(it.name)}">${tile(it)}<span class="st-tile-n">${esc(it.name)}</span></button>
       <div class="st-tile-meta">${meta}${old ? ' · <span class="st-warn">старые — первыми</span>' : ''}</div>
@@ -64,8 +65,8 @@ export function builderView(): string {
   const sh = cost.shortage;
   const shortNote = sh.mode === 'ok' ? ''
     : `<div class="note-box ${sh.mode === 'blocked' ? 'bad' : 'warn'} st-short" data-short="${sh.mode}"><b>${sh.mode === 'blocked' ? 'Не хватает — собрать нельзя' : 'Не хватает — соберётся в минус'}</b>
-      ${sh.lines.map((l) => `<div>${esc(l.name)}: нужно ${fmt(l.need)}, есть ${fmt(l.have)} → <b>−${fmt(l.missing)}</b></div>`).join('')}
-      <small>${sh.mode === 'blocked' ? 'Уберите лишнее или внесите приход.' : 'Понадобится комментарий; недостачу закроет следующий приход.'}</small></div>`;
+      ${sh.lines.map((l) => { const it = itemById(l.itemId); const u = (x: number) => (it ? qtyText(it, x) : fmt(x)); return `<div>${esc(l.name)}: нужно ${esc(u(l.need))}, есть ${esc(u(l.have))} → <b>−${esc(u(l.missing))}</b></div>`; }).join('')}
+      <small>${sh.mode === 'blocked' ? 'Уберите лишнее или внесите приход.' : c.config.negativePolicy === 'warn' ? 'Понадобится комментарий; недостачу закроет следующий приход.' : 'Недостачу закроет следующий приход.'}</small></div>`;
   const lastUndo = b.undo[b.undo.length - 1];
   return `<div class="hdr-row"><h2 class="h disp">Новый букет</h2>${n ? '<button class="link" data-act="stClear">Очистить</button>' : ''}</div>
     ${ST.templates.length ? `<div class="chips scroll">${ST.templates.map((t) => `<button class="chip" data-act="stTpl" data-id="${esc(t.id)}" aria-pressed="${b.templateId === t.id}">${esc(t.name)}</button>`).join('')}</div>` : ''}
@@ -91,7 +92,15 @@ export function builderView(): string {
 function remember(label: string) {
   const b = ST.builder;
   b.undo = pushUndo(b.undo, snapshotOf(b), label);
+  freshKey();
 }
+
+/**
+ * A changed composition / price / kind is a different operation: it must not reuse the key of an assembly whose
+ * response may have been lost (the server would answer 409 «ключ уже использован» to every later bouquet —
+ * audit CODE-3). Pressing «Собран» again WITHOUT changes keeps the key, so a lost response is replayed safely.
+ */
+function freshKey() { ST.builder.idem = newIdempotencyKey(); }
 
 function setQty(id: string, q: number) {
   const b = ST.builder;
@@ -108,6 +117,7 @@ actions.stClear = () => {
   const b = ST.builder;
   const undo = pushUndo(b.undo, snapshotOf(b), 'очистка');
   Object.assign(b, { qty: {}, planned: null, templateId: null, price: '', priceEdited: false, short: null, undo });
+  freshKey();
   render();
 };
 actions.stUndo = () => {
@@ -115,13 +125,16 @@ actions.stUndo = () => {
   const { entry, stack } = popUndo(b.undo);
   if (!entry) return;
   tg.haptic('light');
-  Object.assign(b, snapshotOf(entry.snap), { undo: stack, short: null });
+  // a price typed by hand after this step is kept: undo is about the composition, not the florist's price
+  const keepPrice = b.priceEdited && b.price !== entry.snap.price ? { price: b.price, priceEdited: true } : {};
+  Object.assign(b, snapshotOf(entry.snap), keepPrice, { undo: stack, short: null });
+  freshKey();
   toast(`Отменено: ${entry.label}`, 'info');
   render();
 };
 actions.stQClear = () => { ST.builder.q = ''; render(); };
 actions.stGroup = (el) => { ST.builder.group = el.dataset.g ?? ''; render(); };
-actions.stKind = (el) => { ST.builder.kind = el.dataset.v as 'order' | 'showcase'; render(); };
+actions.stKind = (el) => { const v = el.dataset.v as 'order' | 'showcase'; if (ST.builder.kind !== v) freshKey(); ST.builder.kind = v; render(); };
 actions.stQty = (el) => {
   const it = itemById(el.dataset.id!);
   if (!it) return;
@@ -143,7 +156,9 @@ actions.stQty = (el) => {
 };
 inputs.stQ = (el) => { ST.builder.q = el.value; render(); };
 inputs.stPrice = (el) => {
-  ST.builder.price = el.value.replace(/\D/g, '');
+  const v = el.value.replace(/\D/g, '');
+  if (v !== ST.builder.price) freshKey();
+  ST.builder.price = v;
   ST.builder.priceEdited = ST.builder.price !== '';
   // update only the margin text: re-rendering would steal the focus on every key
   const c = builderCost();
@@ -158,14 +173,16 @@ actions.stTpl = (el) => {
   b.qty = Object.fromEntries(t.lines.map((l) => [l.itemId, l.qty]));
   b.planned = { ...b.qty };
   b.templateId = t.id;
-  if (t.price) { b.price = String(t.price); b.priceEdited = true; }
+  // a template without a price must not keep the previous price; with fixed pricing the field is not used (CODE-5/16)
+  if (t.price && ST.catalog?.config.pricing.priceMode !== 'fixed') { b.price = String(t.price); b.priceEdited = true; }
+  else { b.price = ''; b.priceEdited = false; }
   tg.haptic('select');
   render();
 };
 /** «Сохранить как шаблон»: from the builder or from a just-sold bouquet (sell screen). */
-export function saveTemplateSheet(lines: Array<{ itemId: string; qty: number }>, price: number | null, suggest = '') {
+export function saveTemplateSheet(lines: Array<{ itemId: string; qty: number }>, price: number | null, suggest = '', priceByHand = true) {
   const sh = sheet(`<h4>Шаблон букета</h4><p>Состав${price ? ' и цена' : ''} сохранятся, букет можно будет собрать одним касанием.</p><input id="stTplName" placeholder="Например, 15 роз с эвкалиптом" maxlength="60" value="${esc(suggest)}">
-    ${price ? `<label class="tog-line"><input type="checkbox" id="stTplPrice" checked> с ценой ${esc(money(price))}</label>` : ''}<button class="b acc full" id="stTplOk">Сохранить</button>`);
+    ${price ? `<label class="tog-line"><input type="checkbox" id="stTplPrice" ${priceByHand ? 'checked' : ''}> с ценой ${esc(money(price))}</label>` : ''}<button class="b acc full" id="stTplOk">Сохранить</button>`);
   (sh.querySelector('#stTplOk') as HTMLButtonElement).onclick = async () => {
     const name = (sh.querySelector('#stTplName') as HTMLInputElement).value.trim();
     if (name.length < 2) { toast('Введите название', 'error'); return; }
@@ -190,7 +207,8 @@ actions.stSaveTpl = () => {
   const b = ST.builder;
   const lines = Object.entries(b.qty).filter(([, q]) => q > 0).map(([itemId, qty]) => ({ itemId, qty }));
   const c = builderCost();
-  saveTemplateSheet(lines, b.priceEdited && +b.price > 0 ? +b.price : c?.price ?? null, templateName(lines));
+  // the price is frozen into the template only when typed by hand; the suggested one follows purchase prices (CODE-21)
+  saveTemplateSheet(lines, b.priceEdited && +b.price > 0 ? +b.price : c?.price ?? null, templateName(lines), b.priceEdited && +b.price > 0);
 };
 
 async function doAssemble(allowShort = false, comment = '') {
@@ -224,7 +242,12 @@ async function doAssemble(allowShort = false, comment = '') {
     tg.haptic('error');
     const err = e as StockErr;
     if (err.code === 'stock_short') { b.short = err.details as StockShortDetails; openShortSheet(); }
-    else toast(err.message, 'error');
+    else if (err.code === 'network') {
+      // the bouquet may have been created and only the answer lost: «Собран» again without changes is safe (same key)
+      toast('Нет связи. Возможно, букет уже собран — проверьте витрину или нажмите «Собран» ещё раз без изменений.', 'error');
+    } else if (err.code === 'conflict' && err.status === 409 && /ключ/i.test(err.message)) {
+      freshKey(); toast('Состав изменился после сбоя связи — проверьте витрину и нажмите «Собран» ещё раз.', 'error');
+    } else toast(err.message, 'error');
   } finally { ST.busy = false; render(); }
 }
 

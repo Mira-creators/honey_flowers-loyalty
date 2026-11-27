@@ -70,3 +70,14 @@ describe('QTY_PRESETS', () => {
     for (const n of [5, 7, 15, 25, 51]) expect(QTY_PRESETS).toContain(n);
   });
 });
+
+describe('shortageOf uses the server «available» (audit CODE-11)', () => {
+  it('a negative deficit lot does not hide a positive lot', () => {
+    // balance −3 + 10 = 7, but 10 stems can actually be picked
+    const s = shortageOf({ a: 9 }, [{ id: 'a', name: 'Роза', qty: 7, available: 10, trackStock: true }], 'block');
+    expect(s.mode).toBe('ok');
+  });
+  it('falls back to max(0, qty) without «available»', () => {
+    expect(shortageOf({ a: 9 }, [{ id: 'a', name: 'Роза', qty: 7, trackStock: true }], 'block').mode).toBe('blocked');
+  });
+});

@@ -254,18 +254,18 @@ textarea { width: 100%; border: 1px solid var(--c-line); background: var(--c-sur
 .legal-links .link { padding: var(--sp-1h) 0; text-align: left; }
 .check { display: grid; grid-template-columns: 22px 1fr; gap: var(--sp-2); align-items: start; margin-top: var(--sp-2); font-size: var(--fs-sm); font-weight: 600; cursor: pointer; }
 .check input { width: 20px; height: 20px; margin: 1px 0 0; accent-color: var(--c-leaf-deep); }
-.draft-banner { background: color-mix(in srgb, var(--c-accent) 18%, var(--c-surface)); border: 1px dashed var(--c-accent-deep); color: var(--c-ink); border-radius: var(--r-sm); padding: var(--sp-2) var(--sp-3); font-size: var(--fs-sm); font-weight: 700; margin-bottom: var(--sp-2h); }
+.draft-banner { background: var(--c-accent-soft); background: color-mix(in srgb, var(--c-accent) 18%, var(--c-surface)); border: 1px dashed var(--c-accent-deep); color: var(--c-ink); border-radius: var(--r-sm); padding: var(--sp-2) var(--sp-3); font-size: var(--fs-sm); font-weight: 700; margin-bottom: var(--sp-2h); }
 .draft-banner.sm { font-size: var(--fs-xs); padding: var(--sp-1h) var(--sp-2h); margin: var(--sp-2) 0 0; }
 .legal h2 { font-size: var(--fs-2xl); line-height: 1.15; }
 .legal h3 { font-family: var(--font-display); font-size: var(--fs-xl); margin: var(--sp-4) 0 var(--sp-1h); }
 .legal p { margin: 0 0 var(--sp-2); }
 .legal p.li { padding-left: var(--sp-3h); position: relative; }
 .legal p.li::before { content: '•'; position: absolute; left: 2px; color: var(--c-leaf-deep); }
-mark.ph { background: color-mix(in srgb, var(--c-petal) 45%, transparent); color: inherit; border-radius: var(--r-xs); padding: 0 var(--sp-0); }
+mark.ph { background: var(--c-petal-soft); background: color-mix(in srgb, var(--c-petal) 45%, transparent); color: inherit; border-radius: var(--r-xs); padding: 0 var(--sp-0); }
 .bday-card { margin-top: var(--sp-3); border-radius: var(--r-card); padding: var(--sp-3) var(--sp-3h); background: var(--c-surface); border: 1px solid var(--c-line); }
 .bday-card .t { font-weight: 700; }
 .bday-card p { margin: var(--sp-1) 0 var(--sp-2); color: var(--c-muted); font-size: var(--fs-sm); }
 .bday-row { display: grid; grid-template-columns: 1fr auto; gap: var(--sp-2); }
-.badge.unclaimed { background: color-mix(in srgb, var(--c-petal) 40%, var(--c-surface)); }
+.badge.unclaimed { background: var(--c-petal-soft); background: color-mix(in srgb, var(--c-petal) 40%, var(--c-surface)); }
 .phone-offer { margin-top: var(--sp-2h); display: grid; gap: var(--sp-1h); }
 .switch-row { display: grid; grid-template-columns: 1fr auto; gap: var(--sp-2h); align-items: center; padding: var(--sp-2) 0; }

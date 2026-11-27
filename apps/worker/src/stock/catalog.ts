@@ -13,7 +13,7 @@ import { configStmt, num, numOrNull, publicConfigDTO, revStmt, settingsFrom, str
 /** Open lots per item sent to the phone for the cost preview (picking order). */
 export const LADDER_LOTS = 6;
 
-export function itemDTO(r: Row, ladder: StockItemDTO['ladder'] = [], uses30d = 0): StockItemDTO {
+export function itemDTO(r: Row, ladder: StockItemDTO['ladder'] = [], uses30d = 0, available?: number): StockItemDTO {
   return {
     id: String(r.id),
     sku: String(r.sku),
@@ -31,6 +31,8 @@ export function itemDTO(r: Row, ladder: StockItemDTO['ladder'] = [], uses30d = 0
     trackStock: num(r.track_stock) === 1,
     active: num(r.active) === 1,
     qty: num(r.qty),
+    // what can be picked without going «в минус»: Σ positive lots (the balance also counts a negative deficit lot)
+    available: available ?? Math.max(0, num(r.qty)),
     valueMu: num(r.value_mu),
     ladder,
     lastCostMu: numOrNull(r.last_cost_mu),
@@ -79,8 +81,10 @@ export async function getCatalog(app: AppContext, ifNoneMatch: string | null): P
   }
   const warn = new Map(items!.results.map((r) => [String(r.id), num(r.warn_days)]));
   const ladders = new Map<string, StockItemDTO['ladder']>();
+  const avail = new Map<string, number>();
   for (const l of lots!.results) {
     const id = String(l.item_id);
+    avail.set(id, (avail.get(id) ?? 0) + num(l.qty_on_hand));
     const arr = ladders.get(id) ?? [];
     if (arr.length < LADDER_LOTS) {
       arr.push({
@@ -97,7 +101,7 @@ export async function getCatalog(app: AppContext, ifNoneMatch: string | null): P
   const body: StockCatalogDTO = {
     rev: etag,
     today,
-    items: items!.results.map((r) => itemDTO(r, ladders.get(String(r.id)) ?? [], usage.get(String(r.id)) ?? 0)),
+    items: items!.results.map((r) => itemDTO(r, ladders.get(String(r.id)) ?? [], usage.get(String(r.id)) ?? 0, avail.get(String(r.id)) ?? 0)),
     config: publicConfigDTO(s.config),
   };
   return { etag, body };

@@ -71,7 +71,10 @@ export async function assemble(app: AppContext, caller: Caller, body: unknown, c
   if (confirmed && cfg.negativePolicy === 'warn' && (req.shortComment ?? '').trim().length < 3) {
     throw new HttpError(400, 'validation', 'Сборка в минус: напишите комментарий (минимум 3 символа)');
   }
-  const hash = await payloadHash(req);
+  // expectedCost is a UI hint (cost the florist saw), not part of the operation: a retry after a lost response
+  // may carry a refreshed hint and must still replay, not 409 (audit CODE-3).
+  const { expectedCost: _hint, ...hashed } = req;
+  const hash = await payloadHash(hashed);
   const actor = actorOf(caller);
   const db = app.repo.db;
   for (let attempt = 0; attempt < 4; attempt++) {
@@ -225,8 +228,13 @@ export async function toShowcase(app: AppContext, caller: Caller, id: string, cf
   const db = app.repo.db;
   const cur = await db.prepare('SELECT status FROM stock_bouquets WHERE id = ?').bind(id).all<Row>();
   if (!cur.results.length) throw new HttpError(404, 'not_found', 'Букет не найден');
-  if (cur.results[0]!.status === 'on_showcase') return (await loadBouquet(app, id))!;
+  const status = cur.results[0]!.status;
+  if (status === 'on_showcase') return (await loadBouquet(app, id))!;
+  // Only a bouquet assembled «под заказ» goes to the showcase. A sold / disassembled / cancelled one never
+  // comes back (audit CODE-1: a stale showcase list on a second phone re-opened sold bouquets).
+  if (status !== 'assembled') throw new HttpError(409, 'bouquet_state', 'Букет уже продан, разобран или отменён — обновите витрину');
   try {
+    // No status condition on purpose: if it changed meanwhile, the transition trigger aborts → 409 bouquet_state.
     await db.batch([db.prepare(`UPDATE stock_bouquets SET status = 'on_showcase' WHERE id = ?`).bind(id), revStmt(db)]);
   } catch (e) {
     mapPostingError(e);
@@ -314,7 +322,7 @@ async function disassemblyResult(app: AppContext, bouquetId: string, docId: stri
 export async function cancelAssembly(app: AppContext, caller: Caller, id: string, cfg: StockConfig): Promise<BouquetDTO> {
   const actor = actorOf(caller);
   const db = app.repo.db;
-  const r = await db.prepare('SELECT id, status, assembly_doc_id, florist_id, created_at FROM stock_bouquets WHERE id = ?').bind(id).all<Row>();
+  const r = await db.prepare('SELECT id, status, assembly_doc_id, florist_id, created_at, used_deficit FROM stock_bouquets WHERE id = ?').bind(id).all<Row>();
   const b = r.results[0];
   if (!b) throw new HttpError(404, 'not_found', 'Букет не найден');
   if (caller.role !== 'owner') {
@@ -332,7 +340,14 @@ export async function cancelAssembly(app: AppContext, caller: Caller, id: string
   try {
     await db.batch(stmts);
   } catch (e) {
-    if (classifyDbError(e) === 'idempotency') throw new HttpError(409, 'already_cancelled', 'Сборка уже отменена');
+    const kind = classifyDbError(e);
+    if (kind === 'idempotency') throw new HttpError(409, 'already_cancelled', 'Сборка уже отменена');
+    // A storno mirrors the assembly moves. If the bouquet was assembled «в минус» and a receipt has since settled
+    // the shortfall, mirroring into the settled deficit lot is impossible (audit CODE-4). Disassembly handles
+    // this case correctly (stems go back to the lots that actually hold them), so point the user there.
+    if (kind === 'lot_bounds' && num(b.used_deficit) === 1) {
+      throw new HttpError(409, 'conflict', 'Букет собирали «в минус», а недостачу уже закрыла поставка — отменить сборку нельзя. Разберите букет: все стебли вернутся на склад');
+    }
     mapPostingError(e);
   }
   return (await loadBouquet(app, id))!;

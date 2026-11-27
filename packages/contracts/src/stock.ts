@@ -57,6 +57,8 @@ export interface StockItemDTO {
   valueMu: number;
   /** First open lots in picking order (FIFO/FEFO), for the phone-side cost preview. */
   ladder: StockLadderStepDTO[];
+  /** Σ positive lots: what can be picked without going «в минус» (qty also counts a negative deficit lot). */
+  available: number;
   /** Cost of a unit sold «в минус» / of an untracked supply: last receipt cost → std cost. */
   lastCostMu: number | null;
   stdCostMu: number | null;
@@ -220,6 +222,8 @@ export interface StockSaleRequest {
   services?: Array<{ itemId: string; price: number }>;
   channel?: 'store' | 'delivery';
   redeem?: boolean;
+  /** Honey amount shown in the preview; the sale takes exactly this or fails with a clear reason. */
+  redeemPoints?: number | null;
   giftId?: string | null;
   paymentMethod: 'cash' | 'card' | 'transfer' | 'mixed';
 }

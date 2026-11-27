@@ -96,7 +96,7 @@ export function card(bodyHtml: string, o: { tone?: 'plain' | 'soft' | 'honey' | 
 }
 /** Плашка-подсказка: info (зелень), good, warn (янтарь), bad, gift (розовый клевер). */
 export function note(textHtml: string, kind: Kind = 'info'): string {
-  return `<div class="note ${kind}" role="${kind === 'bad' || kind === 'warn' ? 'alert' : 'note'}">${KIND_IC[kind]}<div>${textHtml}</div></div>`;
+  return `<div class="note ${kind}" role="note">${KIND_IC[kind]}<div>${textHtml}</div></div>`;
 }
 export function tag(text: string, tone: 'plain' | 'honey' | 'good' | 'bad' | 'warn' | 'gift' = 'plain'): string {
   return `<span class="tag${tone === 'plain' ? '' : ' ' + tone}">${esc(text)}</span>`;

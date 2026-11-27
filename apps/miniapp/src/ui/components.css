@@ -22,7 +22,7 @@
 /* ---------- Карточки ---------- */
 .card { background: var(--c-surface); border: var(--line-w) solid var(--c-line); border-radius: var(--r-card); padding: var(--sp-3) var(--sp-4); }
 .card.soft { background: var(--c-surface2); border-color: transparent; }
-.card.honey { background: var(--c-accent-soft); border-color: color-mix(in srgb, var(--c-accent) 35%, transparent); }
+.card.honey { background: var(--c-accent-soft); border-color: var(--c-accent); border-color: color-mix(in srgb, var(--c-accent) 35%, transparent); }
 .card.raised { border-color: transparent; box-shadow: var(--sh-2); }
 .card + .card { margin-top: var(--sp-3); }
 .card-h { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); margin-bottom: var(--sp-2); }
@@ -46,7 +46,7 @@
 .field .affix { position: relative; }
 .field .affix input { padding-right: 56px; }
 .field .affix span { position: absolute; right: var(--sp-3); top: 50%; transform: translateY(-50%); color: var(--c-muted); font-size: var(--fs-sm); pointer-events: none; }
-input:focus, select:focus, textarea:focus { border-color: var(--c-focus); outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--c-focus) 22%, transparent); }
+input:focus, select:focus, textarea:focus { border-color: var(--c-focus); outline: none; box-shadow: 0 0 0 3px var(--c-accent-soft); box-shadow: 0 0 0 3px color-mix(in srgb, var(--c-focus) 22%, transparent); }
 
 /* ---------- Подсказки и плашки ---------- */
 .note { display: grid; grid-template-columns: auto 1fr; gap: var(--sp-2); align-items: start; border-radius: var(--r-md); padding: var(--sp-2) var(--sp-3); font-size: var(--fs-sm); background: var(--c-surface2); color: var(--c-ink); margin-bottom: var(--sp-3); }

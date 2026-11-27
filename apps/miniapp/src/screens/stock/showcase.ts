@@ -51,7 +51,7 @@ actions.stToShow = async (el) => {
 actions.stCancelB = (el) => {
   const b = byId(el.dataset.id!);
   if (!b) return;
-  const sh = sheet(`<h4>Отменить сборку №${b.number}?</h4><p>Стебли вернутся в те же партии. Флорист может отменить свою сборку в течение 2 часов, владелец — всегда.</p><div class="row2"><button class="b" id="stCbNo" style="justify-content:center">Не отменять</button><button class="b danger" id="stCbYes">Отменить сборку</button></div>`);
+  const sh = sheet(`<h4>Отменить сборку №${b.number}?</h4><p>Стебли вернутся в те же партии. Флорист может отменить свою сборку в течение ${ST.catalog?.config.assemblyCancelHours ?? 2} ч, владелец — всегда.</p><div class="row2"><button class="b" id="stCbNo" style="justify-content:center">Не отменять</button><button class="b danger" id="stCbYes">Отменить сборку</button></div>`);
   (sh.querySelector('#stCbNo') as HTMLButtonElement).onclick = closeLayer;
   (sh.querySelector('#stCbYes') as HTMLButtonElement).onclick = async () => {
     try { await sapi.cancelBouquet(b.id); closeLayer(); toast('Сборка отменена, стебли на складе', 'ok'); void loadCatalog(true).catch(() => {}); await openShowcase(); }

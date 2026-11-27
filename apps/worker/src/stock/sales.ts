@@ -31,7 +31,10 @@ export const saleSchema = z.object({
   services: z.array(z.object({ itemId: z.string().min(1).max(64), price: z.number().int().min(0).max(100_000_000) })).max(5).default([]),
   channel: z.enum(['store', 'delivery']).default('store'),
   redeem: z.boolean().default(false),
-  giftId: z.string().min(1).max(64).nullish(),
+  // Owner-granted gift ids are long ('grant-grant:<uuid>:<uuid>', ~85 chars) — audit CODE-2.
+  giftId: z.string().min(1).max(200).nullish(),
+  /** Honey amount shown to the client in the preview; step 2 takes exactly this (audit CODE-7). */
+  redeemPoints: z.number().int().min(0).max(100_000_000).nullish(),
   paymentMethod: z.enum(['cash', 'card', 'transfer', 'mixed']).default('cash'),
 });
 type SaleReq = z.infer<typeof saleSchema>;
@@ -120,10 +123,10 @@ export async function postSale(app: AppContext, caller: Caller, body: unknown, c
       ...p.lines.filter((l) => l.bouquetId).map((l) => db.prepare(`UPDATE stock_bouquets SET status = 'sold', sale_id = ?, closed_at = ? WHERE id = ?`).bind(saleId, now, l.bouquetId)),
       db
         .prepare(
-          `INSERT INTO stock_sales (id, client_id, loyalty_status, redeem, gift_id, total_uzs, honey_redeemed, discount_uzs, paid_uzs, payment_method, channel, cost_uzs, actor_id, demo, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO stock_sales (id, client_id, loyalty_status, redeem, redeem_points, gift_id, total_uzs, honey_redeemed, discount_uzs, paid_uzs, payment_method, channel, cost_uzs, actor_id, demo, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?)`,
         )
-        .bind(saleId, p.client?.id ?? null, p.client ? 'pending' : 'none', req.redeem ? 1 : 0, req.giftId ?? null, p.total, p.total, req.paymentMethod, req.channel, p.cost, actor.id, opts.demo ? 1 : 0, now),
+        .bind(saleId, p.client?.id ?? null, p.client ? 'pending' : 'none', req.redeem ? 1 : 0, req.redeem ? req.redeemPoints ?? null : null, req.giftId ?? null, p.total, p.total, req.paymentMethod, req.channel, p.cost, actor.id, opts.demo ? 1 : 0, now),
       db
         .prepare(
           `INSERT INTO stock_sale_lines (sale_id, line_no, kind, bouquet_id, item_id, qty, price_uzs, cost_uzs, category)
@@ -172,8 +175,17 @@ export async function completeLoyalty(app: AppContext, saleId: string, replayed:
     const purchaseId = crypto.randomUUID();
     const res = await app.service.execute(clientId, ({ rules, state, now }) => {
       const prior = state.purchases.find((p) => p.idempotencyKey === key);
+      // A purchase already saved under this key (step 3 lost) is replayed with ITS parameters, not the sale row's:
+      // «без оплаты мёдом» clears gift/redeem on the row, which must not turn a replay into a conflict (CODE-6).
+      if (prior) {
+        return applyPurchase(rules, state, { purchaseId, idempotencyKey: key, staffId: staffId ?? String(sale.actor_id), lines: plines, channel: sale.channel as 'store' | 'delivery', redeemPoints: prior.pointsRedeemed, useRewardId: prior.rewardUsedId }, now);
+      }
       const maxRedeem = maxRedeemable(rules, state, plines, giftId, now);
-      const redeemPoints = prior ? prior.pointsRedeemed : num(sale.redeem) === 1 ? maxRedeem : 0;
+      const fixed = sale.redeem_points === null || sale.redeem_points === undefined ? null : num(sale.redeem_points);
+      if (num(sale.redeem) === 1 && fixed !== null && fixed > maxRedeem) {
+        throw new HttpError(409, 'insufficient_points', `Мёда сейчас меньше, чем в расчёте (доступно ${maxRedeem}) — проведите без оплаты мёдом или пересчитайте`);
+      }
+      const redeemPoints = num(sale.redeem) === 1 ? (fixed ?? maxRedeem) : 0;
       return applyPurchase(rules, state, { purchaseId, idempotencyKey: key, staffId: staffId ?? String(sale.actor_id), lines: plines, channel: sale.channel as 'store' | 'delivery', redeemPoints, useRewardId: giftId }, now);
     }, { keys: [key], rewardIds: giftId ? [giftId] : [] });
     const p = res.outcome.purchase ?? res.state.purchases.find((x) => x.idempotencyKey === key)!;
@@ -209,7 +221,7 @@ export async function retryLoyalty(app: AppContext, caller: Caller, saleId: stri
   if (s.loyalty_status !== 'done') {
     const client = await app.repo.findClientById(String(s.client_id));
     if (client) assertNotOwnCard(app, caller, client);
-    if (withoutRedeem) await db.prepare(`UPDATE stock_sales SET redeem = 0, gift_id = NULL WHERE id = ? AND loyalty_status <> 'done'`).bind(saleId).run();
+    if (withoutRedeem) await db.prepare(`UPDATE stock_sales SET redeem = 0, redeem_points = NULL, gift_id = NULL WHERE id = ? AND loyalty_status <> 'done'`).bind(saleId).run();
   }
   return completeLoyalty(app, saleId, s.loyalty_status === 'done', actingStaff(caller).id);
 }
