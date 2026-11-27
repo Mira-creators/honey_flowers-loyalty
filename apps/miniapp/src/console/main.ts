@@ -8,6 +8,7 @@ import '@fontsource/cormorant-garamond/600.css';
 import '@fontsource/cormorant-garamond/700.css';
 import './console.css';
 import '../ui/mascot.css';
+import '../ui/tokens.css'; // B1: design tokens
 import type { EditableRulesDTO, WebMeDTO } from '@honey/contracts';
 import { ACTIVE_THEME, applyTheme, THEMES } from '../config/themes';
 import { getTestUser, setTestUser } from '../api';

@@ -263,6 +263,22 @@ const curl = (user, method, p, body) => fetch(BASE + p, { method, headers: { "X-
   const meLang = (await curl(A, "GET", "/api/me")).body;
   check("client: language saved on server", meLang.client.lang === "uz", meLang.client.lang);
 
+  // ---------- B1: design-system showcase (test panel) and double-tap guard ----------
+  {
+    ca.act("openTest"); await ca.until(() => ca.q('[data-act="openKit"]'));
+    ca.act("openKit");
+    check("kit: showcase opens with every section", await ca.until(() => ["Цвета темы", "Кнопки", "Поля", "Загрузка", "Пусто", "Ошибка", "Шмель"].every(t => ca.text().includes(t))), ca.text().slice(0, 200));
+    check("kit: palette covers the theme roles", ca.d.querySelectorAll(".kit-sw > div").length >= 30, String(ca.d.querySelectorAll(".kit-sw > div").length));
+    const kb = ca.q("#kitBusyBtn"); kb.click(); kb.click(); kb.click();
+    check("kit: busy() lets a triple tap through once", await ca.until(() => ca.q("#kitBusyCount")?.textContent === "Срабатываний: 1", 4000) && ca.q("#kitBusyBtn") && !ca.q("#kitBusyBtn").disabled, ca.q("#kitBusyCount")?.textContent);
+    ca.act("kitFieldErr");
+    check("kit: field error shown without re-render", ca.q('[data-field="kitPhone"]').classList.contains("err") && ca.text().includes("+998"), "");
+    ca.act("kitNet", '[data-v="off"]');
+    check("kit: offline banner (in the client language)", await ca.until(() => { const b = ca.q(".net-bar"); return b && !b.classList.contains("back") && /Нет интернета|Internet yo/.test(b.textContent); }), ca.q(".net-bar")?.textContent);
+    ca.act("kitNet", '[data-v="on"]');
+    ca.act("kitClose");
+    check("kit: closes back to the card", await ca.until(() => !ca.q(".kit-page")), "");
+  }
   check("no JS errors (client)", ca.errors.length === 0, ca.errors.join("; "));
   check("no JS errors (staff)", sb.errors.length === 0, sb.errors.join("; "));
   for (const r of results) console.log(r[0], "-", r[1], r[0] === "FAIL" ? "→ " + r[2] : "");

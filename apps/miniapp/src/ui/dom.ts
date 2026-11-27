@@ -5,9 +5,18 @@ export const fmt = (n: number) => Math.round(n).toLocaleString('ru-RU');
 export const reduceMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 export const sleep = (ms: number) => new Promise(r => setTimeout(r, reduceMotion() ? 0 : ms));
 
+const TOAST_IC: Record<'info' | 'error' | 'ok', string> = {
+  ok: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
+  error: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.5M12 16.3v.2"/></svg>',
+  info: '',
+};
+/** Короткое сообщение внизу экрана. ok — зелень клевера, error — красный, info — тёмный. Встаёт над вкладками. */
 export function toast(msg: string, kind: 'info' | 'error' | 'ok' = 'info') {
+  document.querySelectorAll('.toast').forEach(o => o.remove()); // one at a time: a new message replaces the old
   const t = document.createElement('div');
-  t.className = 'toast ' + kind; t.setAttribute('role', 'status'); t.textContent = msg;
+  t.className = 'toast ' + kind + (document.querySelector('.tabs') ? ' has-tabs' : '');
+  t.setAttribute('role', kind === 'error' ? 'alert' : 'status');
+  t.innerHTML = TOAST_IC[kind]; const span = document.createElement('span'); span.textContent = msg; t.appendChild(span);
   document.body.appendChild(t);
   setTimeout(() => t.classList.add('out'), kind === 'error' ? 3800 : 2200);
   setTimeout(() => t.remove(), kind === 'error' ? 4200 : 2600);

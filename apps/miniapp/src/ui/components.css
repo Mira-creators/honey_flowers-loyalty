@@ -1,0 +1,143 @@
+/*
+ * КОМПОНЕНТЫ дизайн-системы (B1). Разметку для них отдаёт src/ui/kit.ts — пользуйтесь функциями оттуда,
+ * а не пишите классы руками. Цвета — только --c-* (тема), размеры — только токены (ui/tokens.css).
+ * Старые классы кнопок (.b, .acc, .pri, .danger, .full, .big, .sm) оставлены как есть и описаны в styles.css.
+ */
+
+/* ---------- Кнопки: дополнения к .b ---------- */
+.b { transition: transform var(--dur-1) var(--ease), background-color var(--dur-2) var(--ease), border-color var(--dur-2) var(--ease); }
+.b:not(:disabled):active { transform: scale(.98); }
+.b.ghost { background: none; border-color: transparent; color: var(--c-accent-deep); justify-content: center; }
+.b.leaf { background: var(--c-leaf-deep); border-color: var(--c-leaf-deep); color: var(--c-on-good); justify-content: center; }
+.b.soft { background: var(--c-surface2); border-color: transparent; }
+.b.ic-only { width: var(--tap); padding: 0; justify-content: center; }
+/* Занята (идёт запрос): блокирует повторное нажатие, показывает кружок вместо текста. */
+.b.is-busy { position: relative; color: transparent !important; pointer-events: none; }
+.b.is-busy > * { visibility: hidden; }
+.b.is-busy::after { content: ""; position: absolute; inset: 0; margin: auto; width: 18px; height: 18px; border-radius: 50%; border: 2px solid currentColor; border-color: var(--c-muted); border-top-color: transparent; animation: spin .7s linear infinite; }
+.b.acc.is-busy::after { border-color: var(--c-on-accent); border-top-color: transparent; }
+.b.pri.is-busy::after, .b.danger.is-busy::after, .b.leaf.is-busy::after { border-color: var(--c-bg); border-top-color: transparent; }
+.btn-col { display: grid; gap: var(--sp-2); margin-top: var(--sp-4); }
+
+/* ---------- Карточки ---------- */
+.card { background: var(--c-surface); border: var(--line-w) solid var(--c-line); border-radius: var(--r-card); padding: var(--sp-3) var(--sp-4); }
+.card.soft { background: var(--c-surface2); border-color: transparent; }
+.card.honey { background: var(--c-accent-soft); border-color: color-mix(in srgb, var(--c-accent) 35%, transparent); }
+.card.raised { border-color: transparent; box-shadow: var(--sh-2); }
+.card + .card { margin-top: var(--sp-3); }
+.card-h { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); margin-bottom: var(--sp-2); }
+.card-h h3 { margin: 0; font-family: var(--font-display); font-weight: var(--fw-display); font-size: var(--fs-lg); line-height: var(--lh-tight); }
+.card .over { font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: var(--ls-caps); color: var(--c-muted); font-weight: var(--fw-strong); }
+
+/* ---------- Заголовок экрана ---------- */
+.page-h { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--sp-3); margin: var(--sp-1) 0 var(--sp-4); }
+.page-h h2 { margin: 0; font-family: var(--font-display); font-weight: var(--fw-display); font-size: var(--fs-xl); line-height: var(--lh-tight); }
+.page-h p { margin: var(--sp-1) 0 0; color: var(--c-muted); font-size: var(--fs-sm); }
+
+/* ---------- Поля ---------- */
+.field { display: grid; gap: var(--sp-1); margin-bottom: var(--sp-3); text-align: left; }
+.field > label { font-size: var(--fs-sm); font-weight: var(--fw-strong); color: var(--c-ink); }
+.field .hint { font-size: var(--fs-xs); color: var(--c-muted); }
+.field .err-t { font-size: var(--fs-xs); color: var(--c-bad); font-weight: var(--fw-strong); display: none; }
+.field.err input, .field.err select, .field.err textarea { border-color: var(--c-bad); background: var(--c-bad-soft); }
+.field.err .err-t { display: block; }
+.field.err .hint { display: none; }
+.field input, .field select, .field textarea { margin: 0; min-height: var(--tap); }
+.field .affix { position: relative; }
+.field .affix input { padding-right: 56px; }
+.field .affix span { position: absolute; right: var(--sp-3); top: 50%; transform: translateY(-50%); color: var(--c-muted); font-size: var(--fs-sm); pointer-events: none; }
+input:focus, select:focus, textarea:focus { border-color: var(--c-focus); outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--c-focus) 22%, transparent); }
+
+/* ---------- Подсказки и плашки ---------- */
+.note { display: grid; grid-template-columns: auto 1fr; gap: var(--sp-2); align-items: start; border-radius: var(--r-md); padding: var(--sp-2) var(--sp-3); font-size: var(--fs-sm); background: var(--c-surface2); color: var(--c-ink); margin-bottom: var(--sp-3); }
+.note > svg { width: var(--ic); height: var(--ic); margin-top: 1px; }
+.note b { font-weight: var(--fw-strong); }
+.note.info { background: var(--c-leaf-soft); }
+.note.info > svg { color: var(--c-leaf-deep); }
+.note.good { background: var(--c-good-soft); }
+.note.good > svg { color: var(--c-good); }
+.note.warn { background: var(--c-warn-soft); }
+.note.warn > svg { color: var(--c-warn); }
+.note.bad { background: var(--c-bad-soft); }
+.note.bad > svg { color: var(--c-bad); }
+.note.gift { background: var(--c-petal-soft); }
+.note.gift > svg { color: var(--c-petal-deep); }
+
+/* ---------- Бейджи ---------- */
+.tag { display: inline-flex; align-items: center; gap: var(--sp-1); font-size: var(--fs-2xs); font-weight: var(--fw-strong); padding: var(--sp-0) var(--sp-2); border-radius: var(--r-pill); background: var(--c-surface2); color: var(--c-muted); white-space: nowrap; }
+.tag.honey { background: var(--c-accent-soft); color: var(--c-accent-deep); }
+.tag.good { background: var(--c-good-soft); color: var(--c-good); }
+.tag.bad { background: var(--c-bad-soft); color: var(--c-bad); }
+.tag.warn { background: var(--c-warn-soft); color: var(--c-warn); }
+.tag.gift { background: var(--c-petal-soft); color: var(--c-petal-deep); }
+
+/* ---------- Лист (нижняя шторка): заголовок и ручка ---------- */
+.sheet::before { content: ""; display: block; width: 40px; height: 4px; border-radius: var(--r-pill); background: var(--c-line); margin: calc(-1 * var(--sp-2)) auto var(--sp-3); }
+.sheet-h { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--sp-3); margin-bottom: var(--sp-2); }
+.sheet-h h4 { margin: 0; }
+.sheet-h .x { border: 0; background: var(--c-surface2); color: var(--c-muted); width: var(--tap-sm); height: var(--tap-sm); border-radius: 50%; display: grid; place-items: center; cursor: pointer; flex: none; }
+.sheet-h .x svg { width: 18px; height: 18px; }
+.sheet-foot { position: sticky; bottom: calc(-1 * (var(--sp-6) + env(safe-area-inset-bottom, 0px))); background: var(--c-surface); padding: var(--sp-3) 0 var(--sp-1); margin-top: var(--sp-2); display: grid; gap: var(--sp-2); }
+
+/* ---------- Состояния экрана: загрузка, пусто, ошибка ---------- */
+.state { display: grid; justify-items: center; text-align: center; gap: var(--sp-2); padding: var(--sp-10) var(--sp-4) var(--sp-8); }
+.state.compact { padding: var(--sp-6) var(--sp-2); }
+.state .art { height: 72px; display: grid; place-items: center; }
+.state .art svg { overflow: visible; }
+.state h3 { margin: var(--sp-1) 0 0; font-family: var(--font-display); font-weight: var(--fw-display); font-size: var(--fs-xl); line-height: var(--lh-tight); text-wrap: balance; }
+.state p { margin: 0; color: var(--c-muted); font-size: var(--fs-sm); max-width: 32ch; }
+.state .b { margin-top: var(--sp-2); min-width: 180px; justify-content: center; }
+.state.error h3 { color: var(--c-ink); }
+.state .code { font-size: var(--fs-xs); color: var(--c-muted); letter-spacing: 0; font-family: var(--font-body); margin: 0; }
+
+/* Скелет: серые полосы на месте текста, пока данные грузятся. */
+.skel { display: grid; gap: var(--sp-2); }
+.skel i { display: block; height: 14px; border-radius: var(--r-xs); background: linear-gradient(90deg, var(--c-skel) 0%, var(--c-skel-hi) 50%, var(--c-skel) 100%); background-size: 200% 100%; animation: shimmer 1.4s linear infinite; }
+.skel i.h { height: 22px; width: 55%; }
+.skel i.blk { height: 92px; border-radius: var(--r-card); }
+.skel i.row { height: 56px; border-radius: calc(var(--r-card) * .7); }
+.skel i.s { width: 70%; }
+@keyframes shimmer { to { background-position: -200% 0; } }
+
+/* ---------- Тосты: дополнения к .toast ---------- */
+.toast { display: flex; align-items: center; gap: var(--sp-2); box-shadow: var(--sh-3); bottom: calc(var(--sp-6) + env(safe-area-inset-bottom, 0px)); }
+.toast svg { width: 18px; height: 18px; flex: none; }
+.toast.ok { background: var(--c-leaf-deep); color: var(--c-on-good); }
+.toast.has-tabs { bottom: calc(var(--tabs-h) + var(--sp-4) + env(safe-area-inset-bottom, 0px)); }
+
+/* ---------- «Нет сети» ---------- */
+.net-bar { position: fixed; left: 50%; top: calc(var(--sp-2) + env(safe-area-inset-top, 0px)); transform: translate(-50%, -150%); z-index: var(--z-net); display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-2) var(--sp-4); border-radius: var(--r-pill); background: var(--c-notif); color: var(--c-notif-ink); font-size: var(--fs-sm); font-weight: var(--fw-strong); box-shadow: var(--sh-3); transition: transform var(--dur-3) var(--ease); max-width: calc(100% - 2 * var(--gutter)); }
+.net-bar svg { width: 18px; height: 18px; flex: none; }
+.net-bar.on { transform: translate(-50%, 0); }
+.net-bar.back { background: var(--c-leaf-deep); color: var(--c-on-good); }
+
+/* ---------- Строка списка (ключ — значение) ---------- */
+.kv { display: flex; justify-content: space-between; align-items: baseline; gap: var(--sp-3); padding: var(--sp-2) 0; border-bottom: var(--line-w) solid var(--c-line); font-size: var(--fs-sm); }
+.kv:last-child { border-bottom: 0; }
+.kv span { color: var(--c-muted); }
+.kv b { font-variant-numeric: tabular-nums; text-align: right; }
+.kv b.honey { color: var(--c-accent-deep); }
+.kv b.good { color: var(--c-good); }
+.kv b.gift { color: var(--c-petal-deep); }
+
+/* ---------- Разделитель с веточкой клевера ---------- */
+.sprig { display: flex; align-items: center; gap: var(--sp-2); color: var(--c-leaf); margin: var(--sp-5) 0 var(--sp-3); }
+.sprig::before, .sprig::after { content: ""; flex: 1; height: var(--line-w); background: var(--c-line); }
+.sprig svg { width: 22px; height: 14px; }
+
+/* ---------- Витрина компонентов (тестовая панель) ---------- */
+.kit-page { position: fixed; inset: 0; z-index: var(--z-modal); background: var(--c-bg); overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.kit-page .scr { max-width: var(--maxw); margin: 0 auto; overflow: visible; }
+.kit-bar { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: var(--sp-2); padding: calc(var(--sp-2) + env(safe-area-inset-top, 0px)) var(--gutter) var(--sp-2); background: var(--c-surface); border-bottom: var(--line-w) solid var(--c-line); }
+.kit-bar h2 { margin: 0 auto 0 0; font-family: var(--font-display); font-weight: var(--fw-display); font-size: var(--fs-lg); }
+.kit-sec { margin-top: var(--sp-6); }
+.kit-sec > h3 { font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: var(--ls-caps); color: var(--c-muted); margin: 0 0 var(--sp-2); }
+.kit-sw { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: var(--sp-2); }
+.kit-sw div { border-radius: var(--r-sm); border: var(--line-w) solid var(--c-line); overflow: hidden; font-size: var(--fs-2xs); background: var(--c-surface); }
+.kit-sw i { display: block; height: 40px; }
+.kit-sw span { display: block; padding: var(--sp-1) var(--sp-2); color: var(--c-muted); overflow-wrap: anywhere; }
+.kit-type > * { margin: 0 0 var(--sp-2); }
+.kit-row { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; }
+.kit-box { border: var(--line-w) dashed var(--c-line); border-radius: var(--r-card); }
+.kit-bar { flex-wrap: wrap; }
+.kit-bar .chips { order: 3; width: 100%; }

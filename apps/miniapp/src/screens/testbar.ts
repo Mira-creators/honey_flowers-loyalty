@@ -30,6 +30,7 @@ function panelHtml() {
     <div class="grid2"><button class="b" data-act="demoSeed" ${demoBusy ? 'disabled' : ''} style="justify-content:center">Заполнить демо-данными</button><button class="b danger-outline" data-act="demoClear" ${demoBusy ? 'disabled' : ''} style="justify-content:center">Удалить демо-данные</button></div>
     <div class="sub">Дизайн</div>
     <div class="chips">${Object.entries(THEMES).map(([id, t]) => `<button class="chip" data-act="testTheme" data-th="${id}" aria-pressed="${S.themeId === id}">${esc(t.name)}</button>`).join('')}</div>
+    <button class="b full" data-act="openKit" style="margin-top:var(--sp-2);justify-content:center">Витрина компонентов</button>
     <div class="sub">Сначала</div>
     <button class="b full danger-outline" data-act="testResetMe" style="justify-content:center">Удалить мои данные клиента и пройти регистрацию заново</button>
     ${!tg.inTelegram ? `<button class="link" data-act="testLogout" style="margin-top:10px">Выйти из тестового входа</button>` : ''}

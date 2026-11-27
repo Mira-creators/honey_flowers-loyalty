@@ -1,7 +1,9 @@
 /** Entry: boot, auth, routing by role, polling for live client updates, delegated events. */
 import '@fontsource/cormorant-garamond/600.css';
 import '@fontsource/cormorant-garamond/700.css';
+import './ui/tokens.css'; // B1: design tokens (sizes, type, motion) — before the styles that use them
 import './styles.css';
+import './ui/components.css'; // B1: design-system components
 import './ui/mascot.css';
 import type { ClientSummaryDTO, MeDTO } from '@honey/contracts';
 import { S, actions, changes, inputs, app, resetStaff, type OwnerTab } from './state';
@@ -18,6 +20,8 @@ import { closeClientCard } from './screens/clients';
 import { testButton } from './screens/testbar';
 import { myCardView } from './screens/myCard';
 import { legalPageView, reconsentView } from './screens/legal';
+import { installUi } from './ui/install'; // B1: «нет сети» banner, closeSheet
+import './screens/kitShowcase'; // B1: component showcase (test panel)
 import { floristInStock, ST, stockBack, stockBoot, stockKey, stockNav, stockView } from './screens/stock';
 
 const root = document.getElementById('app')!;
@@ -35,6 +39,7 @@ function paintTheme() {
   tg.setColors((dark ? th.dark : th.light).bg);
 }
 tg.ready(); paintTheme(); tg.onThemeChanged(paintTheme);
+installUi(); // B1
 
 /* ---------- navigation for staff roles ---------- */
 const NAV: Record<string, Array<[OwnerTab, string, string]>> = {
